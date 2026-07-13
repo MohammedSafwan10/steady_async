@@ -11,7 +11,13 @@ Publication is intentionally manual for version 0.1.0.
 5. Publish `steady_async` from Mohammed Safwan's pub.dev Google account, then
    transfer it to the verified `nexdark.com` publisher.
 6. Publish and transfer `steady_async_riverpod`, then `steady_async_bloc`.
-7. Enable GitHub trusted publishing only after all three manual releases.
+7. After all three manual releases, enable GitHub trusted publishing with
+   repository `MohammedSafwan10/steady_async` and these tag patterns:
+   - `steady_async-v{{version}}`
+   - `steady_async_riverpod-v{{version}}`
+   - `steady_async_bloc-v{{version}}`
+8. Future releases are triggered by matching tags after the pubspec and
+   changelog versions are committed.
 
 ## Demo DNS
 
