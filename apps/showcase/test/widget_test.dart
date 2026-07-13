@@ -46,4 +46,23 @@ void main() {
     expect(find.text('Loader timing built in'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('sending a request does not move the page', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1600, 1000));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(const SteadyShowcaseApp());
+    await tester.pump(const Duration(seconds: 2));
+    final scrollable = tester.state<ScrollableState>(
+      find.byType(Scrollable).first,
+    );
+    final before = scrollable.position.pixels;
+
+    await tester.tap(find.text('Send request'));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(scrollable.position.pixels, before);
+    expect(find.text('Running · 800 ms'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
 }

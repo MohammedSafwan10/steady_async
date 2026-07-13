@@ -9,7 +9,6 @@ class ShowcasePage extends StatefulWidget {
 
 class _ShowcasePageState extends State<ShowcasePage> {
   final _demoKey = GlobalKey();
-  final _requestLabKey = GlobalKey();
   final _featuresKey = GlobalKey();
   final _adaptersKey = GlobalKey();
   double _latency = 800;
@@ -44,7 +43,6 @@ class _ShowcasePageState extends State<ShowcasePage> {
 
   void _runRequest() {
     _timer?.cancel();
-    unawaited(_scrollTo(_requestLabKey));
     setState(() {
       _refreshing = true;
       _lastFailed = false;
@@ -112,7 +110,6 @@ class _ShowcasePageState extends State<ShowcasePage> {
             child: KeyedSubtree(
               key: _demoKey,
               child: _Hero(
-                requestLabKey: _requestLabKey,
                 latency: _latency,
                 failureRate: _failureRate,
                 refreshing: _refreshing,

@@ -210,7 +210,6 @@ class _NavButton extends StatelessWidget {
 
 class _Hero extends StatelessWidget {
   const _Hero({
-    required this.requestLabKey,
     required this.latency,
     required this.failureRate,
     required this.refreshing,
@@ -222,7 +221,6 @@ class _Hero extends StatelessWidget {
     required this.onCopy,
   });
 
-  final GlobalKey requestLabKey;
   final double latency;
   final double failureRate;
   final bool refreshing;
@@ -240,18 +238,15 @@ class _Hero extends StatelessWidget {
       builder: (context, constraints) {
         final stacked = constraints.maxWidth < 930;
         final intro = _HeroCopy(onCopy: onCopy);
-        final lab = KeyedSubtree(
-          key: requestLabKey,
-          child: _RequestLab(
-            latency: latency,
-            failureRate: failureRate,
-            refreshing: refreshing,
-            lastFailed: lastFailed,
-            users: users,
-            onLatency: onLatency,
-            onFailureRate: onFailureRate,
-            onRun: onRun,
-          ),
+        final lab = _RequestLab(
+          latency: latency,
+          failureRate: failureRate,
+          refreshing: refreshing,
+          lastFailed: lastFailed,
+          users: users,
+          onLatency: onLatency,
+          onFailureRate: onFailureRate,
+          onRun: onRun,
         );
         if (stacked) {
           return Column(
@@ -379,15 +374,15 @@ class _RequestLab extends StatelessWidget {
       children: [
         Padding(
           padding: const EdgeInsets.fromLTRB(24, 20, 18, 12),
-          child: Row(
-            children: [
-              const Expanded(
-                child: Text(
-                  'Request lab',
-                  style: TextStyle(fontSize: 21, fontWeight: FontWeight.w900),
-                ),
-              ),
-              FilledButton(
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final status = _RequestStatus(
+                refreshing: refreshing,
+                failed: lastFailed,
+                latency: latency.round(),
+                itemCount: users.length,
+              );
+              final button = FilledButton(
                 onPressed: refreshing ? null : onRun,
                 style: FilledButton.styleFrom(
                   backgroundColor: _indigo,
@@ -397,8 +392,52 @@ class _RequestLab extends StatelessWidget {
                   ),
                 ),
                 child: Text(refreshing ? 'Running…' : 'Send request'),
-              ),
-            ],
+              );
+              if (constraints.maxWidth < 520) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    const Text(
+                      'Request lab',
+                      style: TextStyle(
+                        fontSize: 21,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    status,
+                    const SizedBox(height: 10),
+                    SizedBox(width: double.infinity, child: button),
+                  ],
+                );
+              }
+              return Row(
+                children: [
+                  const Expanded(
+                    child: Text(
+                      'Request lab',
+                      style: TextStyle(
+                        fontSize: 21,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                  ),
+                  status,
+                  const SizedBox(width: 12),
+                  button,
+                ],
+              );
+            },
+          ),
+        ),
+        AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          height: 3,
+          alignment: Alignment.centerLeft,
+          color: _line,
+          child: FractionallySizedBox(
+            widthFactor: refreshing ? .78 : 0,
+            child: const ColoredBox(color: _indigo),
           ),
         ),
         Padding(
@@ -432,50 +471,78 @@ class _RequestLab extends StatelessWidget {
             },
           ),
         ),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 13),
-          decoration: const BoxDecoration(
-            border: Border(top: BorderSide(color: _line)),
+        for (final user in users) _UserRow(user: user),
+      ],
+    ),
+  );
+}
+
+class _RequestStatus extends StatelessWidget {
+  const _RequestStatus({
+    required this.refreshing,
+    required this.failed,
+    required this.latency,
+    required this.itemCount,
+  });
+
+  final bool refreshing;
+  final bool failed;
+  final int latency;
+  final int itemCount;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = failed
+        ? Colors.red.shade700
+        : refreshing
+        ? _indigo
+        : _mint;
+    final label = failed
+        ? 'Failed · data kept'
+        : refreshing
+        ? 'Running · $latency ms'
+        : '$itemCount users loaded';
+    return SizedBox(
+      width: 160,
+      child: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 180),
+        child: Container(
+          key: ValueKey(label),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+          decoration: BoxDecoration(
+            color: color.withValues(alpha: .09),
+            borderRadius: BorderRadius.circular(999),
           ),
           child: Row(
             children: [
-              Icon(
-                lastFailed
-                    ? Icons.error_outline
-                    : refreshing
-                    ? Icons.sync
-                    : Icons.check_circle_outline,
-                size: 19,
-                color: lastFailed ? Colors.red.shade700 : _indigo,
+              SizedBox(
+                width: 8,
+                height: 8,
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: color,
+                    shape: BoxShape.circle,
+                  ),
+                ),
               ),
-              const SizedBox(width: 9),
+              const SizedBox(width: 7),
               Expanded(
                 child: Text(
-                  lastFailed
-                      ? 'Request failed · previous data kept'
-                      : refreshing
-                      ? 'Refreshing · previous data kept'
-                      : 'Request finished',
-                  style: const TextStyle(fontWeight: FontWeight.w700),
+                  label,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: color,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w800,
+                  ),
                 ),
               ),
             ],
           ),
         ),
-        AnimatedContainer(
-          duration: const Duration(milliseconds: 180),
-          height: 3,
-          alignment: Alignment.centerLeft,
-          color: _line,
-          child: FractionallySizedBox(
-            widthFactor: refreshing ? .78 : 0,
-            child: const ColoredBox(color: _indigo),
-          ),
-        ),
-        for (final user in users) _UserRow(user: user),
-      ],
-    ),
-  );
+      ),
+    );
+  }
 }
 
 class _LabSlider extends StatelessWidget {
