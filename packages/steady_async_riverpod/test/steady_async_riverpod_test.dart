@@ -19,4 +19,38 @@ void main() {
     expect(mapped, isA<SteadyError<int>>());
     expect((mapped as SteadyError<int>).error, same(error));
   });
+
+  test('autoDispose owns a nullable-cursor paged controller', () async {
+    var calls = 0;
+    var disposed = false;
+    final pagerProvider =
+        Provider.autoDispose<SteadyPagedController<int, String?>>((ref) {
+          final controller = SteadyPagedController<int, String?>(
+            firstPageKey: null,
+            loadPage: (cursor) async {
+              calls++;
+              return cursor == null
+                  ? const SteadyPage(items: [1], nextKey: 'next')
+                  : const SteadyPage(items: [2]);
+            },
+          );
+          ref.onDispose(() {
+            disposed = true;
+            controller.dispose();
+          });
+          return controller;
+        });
+    final container = ProviderContainer();
+    final subscription = container.listen(pagerProvider, (_, _) {});
+    final controller = container.read(pagerProvider);
+
+    await controller.loadInitial();
+    await controller.loadMore();
+    expect(controller.value.items, [1, 2]);
+    expect(calls, 2);
+
+    subscription.close();
+    container.dispose();
+    expect(disposed, isTrue);
+  });
 }

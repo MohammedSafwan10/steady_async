@@ -5,7 +5,7 @@ It translates `AsyncValue<T>` without changing your provider architecture.
 
 ```yaml
 dependencies:
-  steady_async_riverpod: ^0.1.0
+  steady_async_riverpod: ^0.1.1
 ```
 
 ```dart
@@ -22,3 +22,7 @@ return SteadyRiverpodView<List<User>>(
 `AsyncValue.toSteadyState()` also gives you an explicit core state. Previous
 values, refresh/reload intent, stack traces, errors, and progress are preserved.
 Requires Dart 3.7+ and Riverpod 3.
+
+For cursor pagination, let an `autoDispose Provider` own a core
+`SteadyPagedController` and dispose it through `ref.onDispose`. See the complete
+[Riverpod 3 and Firestore recipe](https://github.com/MohammedSafwan10/steady_async/blob/main/doc/riverpod-firestore-pagination.md).

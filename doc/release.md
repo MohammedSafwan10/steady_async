@@ -1,22 +1,19 @@
-# First release runbook
+# Release runbook
 
-Publication is intentionally manual for version 0.1.0.
+Version 0.2.0 is published core-first, followed by compatible adapter patches.
 
-1. Confirm `steady_async`, `steady_async_riverpod`, and `steady_async_bloc` are
-   still available on pub.dev. Availability is not a reservation.
-2. Verify `nexdark.com` in Google Search Console with its DNS TXT record, then
-   create the `nexdark.com` publisher on pub.dev.
-3. Run `tool/verify.ps1` and resolve every warning.
-4. Run `dart pub publish --dry-run` inside each package, in core-first order.
-5. Publish `steady_async` from Mohammed Safwan's pub.dev Google account, then
-   transfer it to the verified `nexdark.com` publisher.
-6. Publish and transfer `steady_async_riverpod`, then `steady_async_bloc`.
-7. After all three manual releases, enable GitHub trusted publishing with
-   repository `MohammedSafwan10/steady_async` and these tag patterns:
+1. Run `tool/verify.ps1` and resolve every warning.
+2. Confirm CI passes on minimum, latest, Windows, and macOS jobs.
+3. Run `dart pub publish --dry-run` inside each package, in core-first order.
+4. Publish or tag `steady_async 0.2.0` first.
+5. Publish or tag `steady_async_riverpod 0.1.1`, then
+   `steady_async_bloc 0.1.1`.
+6. GitHub trusted publishing uses repository
+   `MohammedSafwan10/steady_async` and these tag patterns:
    - `steady_async-v{{version}}`
    - `steady_async_riverpod-v{{version}}`
    - `steady_async_bloc-v{{version}}`
-8. Future releases are triggered by matching tags after the pubspec and
+7. Releases are triggered by matching tags after the pubspec and
    changelog versions are committed.
 
 ## Demo DNS

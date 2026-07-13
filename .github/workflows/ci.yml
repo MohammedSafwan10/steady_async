@@ -65,10 +65,46 @@ jobs:
       - run: flutter test
         working-directory: packages/steady_async
 
+  riverpod-minimum-sdk:
+    name: Riverpod on Flutter 3.29.0
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.29.0
+          cache: true
+      - run: flutter pub get
+        working-directory: packages/steady_async_riverpod
+      - run: flutter analyze --fatal-infos
+        working-directory: packages/steady_async_riverpod
+      - run: flutter test
+        working-directory: packages/steady_async_riverpod
+
+  core-platforms:
+    name: Core on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.44.3
+          cache: true
+      - run: flutter pub get
+        working-directory: packages/steady_async
+      - run: flutter analyze --fatal-infos
+        working-directory: packages/steady_async
+      - run: flutter test
+        working-directory: packages/steady_async
+
   publish-dry-run:
     name: Publish dry run
     runs-on: ubuntu-latest
-    needs: [quality, minimum-sdk]
+    needs: [quality, minimum-sdk, riverpod-minimum-sdk, core-platforms]
     strategy:
       fail-fast: false
       matrix:

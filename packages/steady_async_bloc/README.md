@@ -6,7 +6,7 @@ typed selector; no special state classes or base BLoC are imposed.
 
 ```yaml
 dependencies:
-  steady_async_bloc: ^0.1.0
+  steady_async_bloc: ^0.1.1
 ```
 
 ```dart

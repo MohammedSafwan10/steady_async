@@ -32,3 +32,15 @@ replacement stream begins.
 Provider, GetX, `setState`, and custom controllers can pass an explicit
 `SteadyAsyncState<T>` to `SteadyStateView<T>`. Riverpod and BLoC applications
 can install their dedicated adapter without restructuring providers or blocs.
+
+## Pagination in 0.2.0
+
+Existing paged controllers and widgets remain source-compatible. Applications
+may opt into custom pagination state builders or remove a dismissed item with
+`removeWhere` or `removeByKey`.
+
+`removeByKey` requires the controller's `itemKey`. Successful local removal
+invalidates active requests so an older completion cannot restore the item.
+
+A non-null page key must advance. Returning the requested key again now produces
+a `SteadyPaginationException` instead of allowing an infinite request loop.

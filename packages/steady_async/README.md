@@ -15,7 +15,7 @@ policy while remaining independent of Provider, Riverpod, BLoC, and GetX.
 
 ```yaml
 dependencies:
-  steady_async: ^0.1.0
+  steady_async: ^0.2.0
 ```
 
 Flutter 3.22+ and Dart 3.4+ are supported.
@@ -74,7 +74,23 @@ SteadyPagedListView<Post, String>(
 ```
 
 The controller supports cursor or offset keys, guards overlapping requests,
-retains items after append failures, and retries the failed page.
+retains items after append failures, rejects non-advancing cursors, and retries
+the failed page. Local removal is available when a dismissed item must disappear
+before the next refresh:
+
+```dart
+final pages = SteadyPagedController<Post, String>(
+  firstPageKey: 'first',
+  itemKey: (post) => post.id,
+  loadPage: api.fetchPosts,
+);
+
+pages.removeByKey(deletedPostId);
+```
+
+Paged list, grid, and sliver widgets accept custom loading, initial-error,
+append-loading, and append-error builders while retaining Material defaults.
+Every controller operation becomes a safe no-op after disposal.
 
 ## Customize globally
 

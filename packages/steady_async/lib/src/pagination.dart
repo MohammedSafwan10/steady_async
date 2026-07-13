@@ -22,6 +22,21 @@ class SteadyPage<T, K> {
 /// Loads one page identified by a generic cursor or offset key.
 typedef SteadyPageLoader<T, K> = Future<SteadyPage<T, K>> Function(K pageKey);
 
+/// Error reported when a data source returns the same non-null cursor that was
+/// used to request a page.
+class SteadyPaginationException implements Exception {
+  /// Creates a non-advancing cursor error.
+  const SteadyPaginationException.nonAdvancingCursor(this.pageKey);
+
+  /// Cursor that failed to advance.
+  final Object? pageKey;
+
+  @override
+  String toString() =>
+      'SteadyPaginationException: The next page key did not advance from '
+      '$pageKey.';
+}
+
 /// Current stage of a paged data source.
 enum SteadyPagedStatus {
   idle,
@@ -117,18 +132,25 @@ class SteadyPagedController<T, K> extends ChangeNotifier
   SteadyPagedState<T, K> get value => _value;
 
   /// Replaces the loader used by future requests.
-  void updateLoader(SteadyPageLoader<T, K> loader) => _loadPage = loader;
+  void updateLoader(SteadyPageLoader<T, K> loader) {
+    if (_disposed) return;
+    _loadPage = loader;
+  }
 
   /// Loads the first page once while the controller is idle.
   Future<void> loadInitial() async {
-    if (_value.status != SteadyPagedStatus.idle) return;
+    if (_disposed || _value.status != SteadyPagedStatus.idle) return;
     await _replace(firstPageKey, refreshing: false);
   }
 
   /// Replaces existing pages starting at [firstPageKey].
-  Future<void> refresh() => _replace(firstPageKey, refreshing: true);
+  Future<void> refresh() {
+    if (_disposed) return Future<void>.value();
+    return _replace(firstPageKey, refreshing: true);
+  }
 
   Future<void> _replace(K key, {required bool refreshing}) async {
+    if (_disposed) return;
     final generation = ++_generation;
     _setValue(
       _value.copyWith(
@@ -139,7 +161,10 @@ class SteadyPagedController<T, K> extends ChangeNotifier
       ),
     );
     try {
-      final page = await Future<SteadyPage<T, K>>.sync(() => _loadPage(key));
+      final page = _validatePage(
+        key,
+        await Future<SteadyPage<T, K>>.sync(() => _loadPage(key)),
+      );
       if (!_accepts(generation)) return;
       _setValue(
         SteadyPagedState<T, K>(
@@ -164,6 +189,7 @@ class SteadyPagedController<T, K> extends ChangeNotifier
 
   /// Appends the page identified by the current next key.
   Future<void> loadMore() async {
+    if (_disposed) return;
     final key = _value.nextKey;
     if (_value.isBusy || key == null) return;
     final generation = _generation;
@@ -171,7 +197,10 @@ class SteadyPagedController<T, K> extends ChangeNotifier
       _value.copyWith(status: SteadyPagedStatus.loadingMore, clearError: true),
     );
     try {
-      final page = await Future<SteadyPage<T, K>>.sync(() => _loadPage(key));
+      final page = _validatePage(
+        key,
+        await Future<SteadyPage<T, K>>.sync(() => _loadPage(key)),
+      );
       if (!_accepts(generation)) return;
       _setValue(
         SteadyPagedState<T, K>(
@@ -198,8 +227,18 @@ class SteadyPagedController<T, K> extends ChangeNotifier
   }
 
   /// Repeats the failed initial, refresh, or append request.
-  Future<void> retry() =>
-      _value.items.isEmpty || !_value.appendError ? refresh() : loadMore();
+  Future<void> retry() {
+    if (_disposed) return Future<void>.value();
+    return _value.items.isEmpty || !_value.appendError ? refresh() : loadMore();
+  }
+
+  SteadyPage<T, K> _validatePage(K requestedKey, SteadyPage<T, K> page) {
+    final nextKey = page.nextKey;
+    if (nextKey != null && nextKey == requestedKey) {
+      throw SteadyPaginationException.nonAdvancingCursor(requestedKey);
+    }
+    return page;
+  }
 
   List<T> _deduplicate(Iterable<T> items) {
     final keyOf = itemKey;
@@ -211,8 +250,49 @@ class SteadyPagedController<T, K> extends ChangeNotifier
     ];
   }
 
+  /// Removes every item matched by [predicate].
+  ///
+  /// A successful removal invalidates active requests so an older completion
+  /// cannot restore a locally removed item. The current next-page key is kept.
+  bool removeWhere(bool Function(T item) predicate) {
+    if (_disposed) return false;
+    final items = _value.items.where((item) => !predicate(item)).toList();
+    if (items.length == _value.items.length) return false;
+    _generation++;
+    _setValue(
+      SteadyPagedState<T, K>(
+        items: List<T>.unmodifiable(items),
+        status: SteadyPagedStatus.loaded,
+        nextKey: _value.nextKey,
+      ),
+    );
+    return true;
+  }
+
+  /// Removes items whose application key equals [key].
+  ///
+  /// An [itemKey] function must have been supplied to the controller.
+  ///
+  /// ```dart
+  /// final pager = SteadyPagedController<Post, String>(
+  ///   firstPageKey: 'first',
+  ///   itemKey: (post) => post.id,
+  ///   loadPage: repository.loadPosts,
+  /// );
+  /// pager.removeByKey(deletedPostId);
+  /// ```
+  bool removeByKey(Object? key) {
+    if (_disposed) return false;
+    final keyOf = itemKey;
+    if (keyOf == null) {
+      throw StateError('removeByKey requires an itemKey function.');
+    }
+    return removeWhere((item) => keyOf(item) == key);
+  }
+
   /// Clears all items and invalidates active requests.
   void reset() {
+    if (_disposed) return;
     _generation++;
     _setValue(SteadyPagedState<T, K>());
   }
@@ -237,6 +317,30 @@ class SteadyPagedController<T, K> extends ChangeNotifier
 typedef SteadyPagedItemBuilder<T> = Widget Function(
     BuildContext context, T item, int index);
 
+/// Builds a custom paged loading state or append-loading footer.
+///
+/// ```dart
+/// loadingBuilder: (context, state) => const PostsSkeleton()
+/// ```
+typedef SteadyPagedStateBuilder<T, K> = Widget Function(
+  BuildContext context,
+  SteadyPagedState<T, K> state,
+);
+
+/// Builds a custom paged error state with its retry callback.
+///
+/// ```dart
+/// appendErrorBuilder: (context, state, retry) => TextButton(
+///   onPressed: retry,
+///   child: const Text('Retry page'),
+/// )
+/// ```
+typedef SteadyPagedRetryBuilder<T, K> = Widget Function(
+  BuildContext context,
+  SteadyPagedState<T, K> state,
+  VoidCallback retry,
+);
+
 /// List view with automatic paging, pull-to-refresh, and append retry.
 class SteadyPagedListView<T, K> extends StatefulWidget {
   /// Creates a paged list view.
@@ -247,6 +351,10 @@ class SteadyPagedListView<T, K> extends StatefulWidget {
     this.padding,
     this.prefetchExtent = 240,
     this.emptyBuilder,
+    this.loadingBuilder,
+    this.errorBuilder,
+    this.appendLoadingBuilder,
+    this.appendErrorBuilder,
     super.key,
   });
 
@@ -256,6 +364,10 @@ class SteadyPagedListView<T, K> extends StatefulWidget {
   final EdgeInsetsGeometry? padding;
   final double prefetchExtent;
   final WidgetBuilder? emptyBuilder;
+  final SteadyPagedStateBuilder<T, K>? loadingBuilder;
+  final SteadyPagedRetryBuilder<T, K>? errorBuilder;
+  final SteadyPagedStateBuilder<T, K>? appendLoadingBuilder;
+  final SteadyPagedRetryBuilder<T, K>? appendErrorBuilder;
 
   @override
   State<SteadyPagedListView<T, K>> createState() =>
@@ -273,6 +385,16 @@ class _SteadyPagedListViewState<T, K> extends State<SteadyPagedListView<T, K>> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) unawaited(widget.controller.loadInitial());
     });
+  }
+
+  @override
+  void didUpdateWidget(covariant SteadyPagedListView<T, K> oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.controller != widget.controller) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) unawaited(widget.controller.loadInitial());
+      });
+    }
   }
 
   void _attachScrollController() {
@@ -295,12 +417,13 @@ class _SteadyPagedListViewState<T, K> extends State<SteadyPagedListView<T, K>> {
           final state = widget.controller.value;
           if (state.items.isEmpty &&
               state.status == SteadyPagedStatus.initialLoading) {
-            return const SteadyDefaultLoadingView();
+            return widget.loadingBuilder?.call(context, state) ??
+                const SteadyDefaultLoadingView();
           }
           if (state.items.isEmpty && state.status == SteadyPagedStatus.error) {
-            return SteadyDefaultErrorView(
-              onRetry: () => unawaited(widget.controller.retry()),
-            );
+            void retry() => unawaited(widget.controller.retry());
+            return widget.errorBuilder?.call(context, state, retry) ??
+                SteadyDefaultErrorView(onRetry: retry);
           }
           if (state.items.isEmpty && state.status == SteadyPagedStatus.loaded) {
             return widget.emptyBuilder?.call(context) ??
@@ -318,6 +441,8 @@ class _SteadyPagedListViewState<T, K> extends State<SteadyPagedListView<T, K>> {
                   return _PagedFooter<T, K>(
                     state: state,
                     onRetry: () => unawaited(widget.controller.loadMore()),
+                    loadingBuilder: widget.appendLoadingBuilder,
+                    errorBuilder: widget.appendErrorBuilder,
                   );
                 }
                 return widget.itemBuilder(context, state.items[index], index);
@@ -348,6 +473,10 @@ class SteadyPagedGridView<T, K> extends StatefulWidget {
     this.padding,
     this.prefetchExtent = 240,
     this.emptyBuilder,
+    this.loadingBuilder,
+    this.errorBuilder,
+    this.appendLoadingBuilder,
+    this.appendErrorBuilder,
     super.key,
   });
 
@@ -357,6 +486,10 @@ class SteadyPagedGridView<T, K> extends StatefulWidget {
   final EdgeInsetsGeometry? padding;
   final double prefetchExtent;
   final WidgetBuilder? emptyBuilder;
+  final SteadyPagedStateBuilder<T, K>? loadingBuilder;
+  final SteadyPagedRetryBuilder<T, K>? errorBuilder;
+  final SteadyPagedStateBuilder<T, K>? appendLoadingBuilder;
+  final SteadyPagedRetryBuilder<T, K>? appendErrorBuilder;
 
   @override
   State<SteadyPagedGridView<T, K>> createState() =>
@@ -373,17 +506,28 @@ class _SteadyPagedGridViewState<T, K> extends State<SteadyPagedGridView<T, K>> {
   }
 
   @override
+  void didUpdateWidget(covariant SteadyPagedGridView<T, K> oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.controller != widget.controller) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) unawaited(widget.controller.loadInitial());
+      });
+    }
+  }
+
+  @override
   Widget build(BuildContext context) => AnimatedBuilder(
         animation: widget.controller,
         builder: (context, _) {
           final state = widget.controller.value;
           if (state.items.isEmpty && state.isBusy) {
-            return const SteadyDefaultLoadingView();
+            return widget.loadingBuilder?.call(context, state) ??
+                const SteadyDefaultLoadingView();
           }
           if (state.items.isEmpty && state.status == SteadyPagedStatus.error) {
-            return SteadyDefaultErrorView(
-              onRetry: () => unawaited(widget.controller.retry()),
-            );
+            void retry() => unawaited(widget.controller.retry());
+            return widget.errorBuilder?.call(context, state, retry) ??
+                SteadyDefaultErrorView(onRetry: retry);
           }
           if (state.items.isEmpty && state.status == SteadyPagedStatus.loaded) {
             return widget.emptyBuilder?.call(context) ??
@@ -418,6 +562,8 @@ class _SteadyPagedGridViewState<T, K> extends State<SteadyPagedGridView<T, K>> {
                       child: _PagedFooter<T, K>(
                         state: state,
                         onRetry: () => unawaited(widget.controller.loadMore()),
+                        loadingBuilder: widget.appendLoadingBuilder,
+                        errorBuilder: widget.appendErrorBuilder,
                       ),
                     ),
                 ],
@@ -437,11 +583,21 @@ class SteadyPagedSliverList<T, K> extends StatelessWidget {
   const SteadyPagedSliverList({
     required this.controller,
     required this.itemBuilder,
+    this.emptyBuilder,
+    this.loadingBuilder,
+    this.errorBuilder,
+    this.appendLoadingBuilder,
+    this.appendErrorBuilder,
     super.key,
   });
 
   final SteadyPagedController<T, K> controller;
   final SteadyPagedItemBuilder<T> itemBuilder;
+  final WidgetBuilder? emptyBuilder;
+  final SteadyPagedStateBuilder<T, K>? loadingBuilder;
+  final SteadyPagedRetryBuilder<T, K>? errorBuilder;
+  final SteadyPagedStateBuilder<T, K>? appendLoadingBuilder;
+  final SteadyPagedRetryBuilder<T, K>? appendErrorBuilder;
 
   @override
   Widget build(BuildContext context) {
@@ -453,23 +609,25 @@ class SteadyPagedSliverList<T, K> extends StatelessWidget {
       builder: (context, _) {
         final state = controller.value;
         if (state.items.isEmpty && state.isBusy) {
-          return const SliverFillRemaining(
+          return SliverFillRemaining(
             hasScrollBody: false,
-            child: SteadyDefaultLoadingView(),
+            child: loadingBuilder?.call(context, state) ??
+                const SteadyDefaultLoadingView(),
           );
         }
         if (state.items.isEmpty && state.status == SteadyPagedStatus.error) {
+          void retry() => unawaited(controller.retry());
           return SliverFillRemaining(
             hasScrollBody: false,
-            child: SteadyDefaultErrorView(
-              onRetry: () => unawaited(controller.retry()),
-            ),
+            child: errorBuilder?.call(context, state, retry) ??
+                SteadyDefaultErrorView(onRetry: retry),
           );
         }
         if (state.items.isEmpty && state.status == SteadyPagedStatus.loaded) {
-          return const SliverFillRemaining(
+          return SliverFillRemaining(
             hasScrollBody: false,
-            child: SteadyDefaultEmptyView(),
+            child:
+                emptyBuilder?.call(context) ?? const SteadyDefaultEmptyView(),
           );
         }
         return SliverList.builder(
@@ -479,6 +637,8 @@ class SteadyPagedSliverList<T, K> extends StatelessWidget {
               return _PagedFooter<T, K>(
                 state: state,
                 onRetry: () => unawaited(controller.loadMore()),
+                loadingBuilder: appendLoadingBuilder,
+                errorBuilder: appendErrorBuilder,
               );
             }
             if (index >= state.items.length - 3) {
@@ -496,14 +656,23 @@ class SteadyPagedSliverList<T, K> extends StatelessWidget {
 }
 
 class _PagedFooter<T, K> extends StatelessWidget {
-  const _PagedFooter({required this.state, required this.onRetry});
+  const _PagedFooter({
+    required this.state,
+    required this.onRetry,
+    this.loadingBuilder,
+    this.errorBuilder,
+  });
 
   final SteadyPagedState<T, K> state;
   final VoidCallback onRetry;
+  final SteadyPagedStateBuilder<T, K>? loadingBuilder;
+  final SteadyPagedRetryBuilder<T, K>? errorBuilder;
 
   @override
   Widget build(BuildContext context) {
     if (state.appendError) {
+      final custom = errorBuilder;
+      if (custom != null) return custom(context, state, onRetry);
       return Center(
         child: TextButton.icon(
           onPressed: onRetry,
@@ -512,6 +681,8 @@ class _PagedFooter<T, K> extends StatelessWidget {
         ),
       );
     }
+    final custom = loadingBuilder;
+    if (custom != null) return custom(context, state);
     return const Padding(
       padding: EdgeInsets.all(20),
       child: Center(
