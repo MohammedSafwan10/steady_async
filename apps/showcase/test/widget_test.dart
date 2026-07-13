@@ -65,4 +65,29 @@ void main() {
     expect(find.text('Running · 800 ms'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('interactive scenarios show failure and retry states', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1600, 1000));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(const SteadyShowcaseApp());
+    await tester.scrollUntilVisible(
+      find.text('Load with error'),
+      500,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Load with error'));
+    await tester.pump(const Duration(milliseconds: 1300));
+
+    expect(find.text('Could not load projects'), findsOneWidget);
+    await tester.drag(find.byType(CustomScrollView), const Offset(0, 180));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Retry'));
+    await tester.pump(const Duration(milliseconds: 1300));
+    expect(find.text('Mobile checkout'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
 }

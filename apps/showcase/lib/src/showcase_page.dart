@@ -56,13 +56,18 @@ class _ShowcasePageState extends State<ShowcasePage> {
     });
   }
 
-  void _copyInstall() {
-    Clipboard.setData(
-      const ClipboardData(text: 'flutter pub add steady_async'),
+  Future<void> _copyInstall() async {
+    final copied = await copyText('flutter pub add steady_async');
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          copied
+              ? 'Install command copied'
+              : 'Copy blocked — select the command and copy it manually',
+        ),
+      ),
     );
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(const SnackBar(content: Text('Install command copied')));
   }
 
   Future<void> _scrollTo(GlobalKey key) async {
@@ -130,6 +135,7 @@ class _ShowcasePageState extends State<ShowcasePage> {
               onRun: _runRequest,
             ),
           ),
+          const SliverToBoxAdapter(child: _ScenarioShowcase()),
           SliverToBoxAdapter(
             child: KeyedSubtree(key: _featuresKey, child: const _FeatureGrid()),
           ),

@@ -2,12 +2,14 @@ import 'dart:async';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:steady_async/steady_async.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import 'src/clipboard/clipboard_service.dart';
+
 part 'src/showcase_page.dart';
 part 'src/showcase_sections.dart';
+part 'src/scenario_showcase.dart';
 
 const _ink = Color(0xFF171817);
 const _paper = Color(0xFFF7F6F2);
