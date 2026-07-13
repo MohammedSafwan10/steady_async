@@ -1,0 +1,32 @@
+name: Bug report
+description: Report a reproducible defect in a steady_async package.
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: dropdown
+    id: package
+    attributes:
+      label: Package
+      options: [steady_async, steady_async_riverpod, steady_async_bloc, showcase]
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Include code or a public repository and the exact steps.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected and actual behavior
+    validations:
+      required: true
+  - type: input
+    id: flutter
+    attributes:
+      label: Flutter version
+      placeholder: flutter --version
+    validations:
+      required: true

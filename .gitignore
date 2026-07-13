@@ -1,0 +1,9 @@
+.dart_tool/
+.idea/
+.vscode/
+build/
+coverage/
+doc/api/
+*.iml
+*.log
+

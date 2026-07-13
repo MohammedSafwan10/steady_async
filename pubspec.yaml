@@ -1,0 +1,4 @@
+name: steady_async_workspace
+publish_to: none
+environment:
+  sdk: ^3.12.2

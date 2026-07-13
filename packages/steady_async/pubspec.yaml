@@ -1,0 +1,23 @@
+name: steady_async
+description: Perception-aware async UX for Flutter with calm loading, actions, retries, and pagination.
+version: 0.1.0
+homepage: https://steady-async.nexdark.com
+repository: https://github.com/MohammedSafwan10/steady_async
+issue_tracker: https://github.com/MohammedSafwan10/steady_async/issues
+topics: [async, loading, pagination, user-experience, state-management]
+
+environment:
+  sdk: ">=3.4.0 <4.0.0"
+  flutter: ">=3.22.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true

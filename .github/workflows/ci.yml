@@ -1,0 +1,104 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  quality:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: steady_async
+            path: packages/steady_async
+          - name: steady_async_riverpod
+            path: packages/steady_async_riverpod
+          - name: steady_async_bloc
+            path: packages/steady_async_bloc
+          - name: showcase
+            path: apps/showcase
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - run: flutter pub get
+        working-directory: ${{ matrix.path }}
+      - run: dart format --output=none --set-exit-if-changed lib test example
+        if: matrix.name != 'showcase'
+        working-directory: ${{ matrix.path }}
+      - run: dart format --output=none --set-exit-if-changed lib test
+        if: matrix.name == 'showcase'
+        working-directory: ${{ matrix.path }}
+      - run: flutter analyze --fatal-infos
+        working-directory: ${{ matrix.path }}
+      - run: flutter test
+        working-directory: ${{ matrix.path }}
+      - run: dart pub global activate dartdoc
+        if: matrix.name != 'showcase'
+      - run: dart pub global run dartdoc --no-auto-include-dependencies --no-generate-docs --no-validate-links
+        if: matrix.name != 'showcase'
+        working-directory: ${{ matrix.path }}
+      - run: flutter build web --release
+        if: matrix.name == 'showcase'
+        working-directory: ${{ matrix.path }}
+
+  minimum-sdk:
+    name: Core on Flutter 3.22.3
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.22.3
+          cache: true
+      - run: flutter pub get
+        working-directory: packages/steady_async
+      - run: flutter analyze --fatal-infos
+        working-directory: packages/steady_async
+      - run: flutter test
+        working-directory: packages/steady_async
+
+  publish-dry-run:
+    name: Publish dry run
+    runs-on: ubuntu-latest
+    needs: [quality, minimum-sdk]
+    strategy:
+      fail-fast: false
+      matrix:
+        path:
+          - packages/steady_async
+          - packages/steady_async_riverpod
+          - packages/steady_async_bloc
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - run: flutter pub get
+        working-directory: ${{ matrix.path }}
+      - run: dart pub publish --dry-run
+        working-directory: ${{ matrix.path }}
+
+  pana:
+    name: pub.dev score
+    runs-on: ubuntu-latest
+    needs: quality
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - run: flutter pub get
+        working-directory: packages/steady_async
+      - run: dart pub global activate pana
+      - run: dart pub global run pana --exit-code-threshold 0 .
+        working-directory: packages/steady_async

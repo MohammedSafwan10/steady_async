@@ -1,0 +1,4 @@
+dependency_overrides:
+  steady_async:
+    path: ../../packages/steady_async
+

@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Usage discussion
+    url: https://github.com/MohammedSafwan10/steady_async/discussions
+    about: Ask questions and share patterns in Discussions.
