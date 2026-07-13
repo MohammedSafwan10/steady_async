@@ -7,4 +7,3 @@
 5. Update the relevant changelog and public documentation.
 
 Contributions are licensed under BSD-3-Clause.
-

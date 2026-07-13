@@ -8,4 +8,3 @@ external state into the core model.
 
 The core never claims to cancel a Dart `Future`; `cancel()` invalidates its
 generation so that its eventual result cannot mutate public state.
-
