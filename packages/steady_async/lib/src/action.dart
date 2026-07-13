@@ -106,6 +106,7 @@ class SteadyActionController<T> extends ChangeNotifier
   }
 
   Future<T?> _execute() async {
+    if (_disposed) return null;
     _successTimer?.cancel();
     final generation = ++_generation;
     _setValue(SteadyActionState<T>.running());

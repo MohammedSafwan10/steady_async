@@ -48,9 +48,11 @@ class _SteadyAsyncBuilderState<T> extends State<SteadyAsyncBuilder<T>> {
   void initState() {
     super.initState();
     _attachController();
-    if (widget.autoStart) {
+    if (widget.autoStart && _controller.value.isIdle) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) unawaited(_controller.load());
+        if (mounted && _controller.value.isIdle) {
+          unawaited(_controller.load());
+        }
       });
     }
   }
@@ -64,14 +66,24 @@ class _SteadyAsyncBuilderState<T> extends State<SteadyAsyncBuilder<T>> {
   @override
   void didUpdateWidget(covariant SteadyAsyncBuilder<T> oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.controller != widget.controller) {
+    final controllerChanged = oldWidget.controller != widget.controller;
+    if (controllerChanged) {
       if (_ownsController) _controller.dispose();
       _attachController();
+      if (oldWidget.load != widget.load && widget.reloadOnLoaderChange) {
+        unawaited(_controller.reload());
+      } else if (widget.autoStart && _controller.value.isIdle) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted && _controller.value.isIdle) {
+            unawaited(_controller.load());
+          }
+        });
+      }
     } else {
       _controller.updateLoader(widget.load);
-    }
-    if (oldWidget.load != widget.load && widget.reloadOnLoaderChange) {
-      unawaited(_controller.reload());
+      if (oldWidget.load != widget.load && widget.reloadOnLoaderChange) {
+        unawaited(_controller.reload());
+      }
     }
   }
 

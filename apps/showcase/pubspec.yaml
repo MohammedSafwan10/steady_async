@@ -12,7 +12,8 @@ dependencies:
     sdk: flutter
   flutter_localizations:
     sdk: flutter
-  steady_async: ^0.1.0
+  steady_async:
+    path: ../../packages/steady_async
   url_launcher: ^6.3.2
   web: ^1.1.1
 

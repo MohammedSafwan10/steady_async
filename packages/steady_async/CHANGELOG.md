@@ -1,3 +1,20 @@
+## 0.2.1
+
+- Prevented sequential actions queued before disposal from executing afterward.
+- Made `keepPreviousData: false` hide retained content as documented.
+- Preserved the original loader-delay deadline across progress updates.
+- Continued list and grid pagination when a page does not fill the viewport.
+- Continued list, grid, and sliver pagination past empty non-terminal pages.
+- Stopped list, grid, and sliver prefetch from retrying failed appends until the
+  retry action is invoked.
+- Kept refresh errors visible alongside retained items with retry support.
+- Added a dedicated inline `refreshErrorBuilder` so existing full-screen
+  `errorBuilder` implementations keep their original layout contract.
+- Handled list scroll-controller and async-controller replacement correctly.
+- Avoided auto-starting non-idle external controllers while preserving
+  `reloadOnLoaderChange` during controller replacement.
+- Detected repeated cursor cycles across a pagination session.
+
 ## 0.2.0
 
 - Hardened paged-controller disposal, reset, refresh, and stale-result behavior.

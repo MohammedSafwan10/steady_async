@@ -76,6 +76,32 @@ void main() {
     controller.dispose();
   });
 
+  test('sequential calls queued before disposal never execute afterward',
+      () async {
+    final first = Completer<int>();
+    var calls = 0;
+    final controller = SteadyActionController<int>(
+      () {
+        calls++;
+        return first.future;
+      },
+      concurrency: SteadyActionConcurrency.sequential,
+      successVisibleDuration: Duration.zero,
+    );
+
+    final firstRun = controller.run();
+    final queuedRun = controller.run();
+    await Future<void>.delayed(Duration.zero);
+    expect(calls, 1);
+
+    controller.dispose();
+    first.complete(1);
+
+    expect(await firstRun, 1);
+    expect(await queuedRun, isNull);
+    expect(calls, 1);
+  });
+
   test('success resets after the configured duration', () async {
     final controller = SteadyActionController<int>(
       () async => 1,

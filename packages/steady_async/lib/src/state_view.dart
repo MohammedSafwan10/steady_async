@@ -47,6 +47,9 @@ class SteadyStateView<T> extends StatefulWidget {
 
 class _SteadyStateViewState<T> extends State<SteadyStateView<T>> {
   late SteadyAsyncState<T> _visibleState;
+  late SteadyTransitionPolicy _appliedPolicy;
+  bool _initialized = false;
+  bool _suppressTransition = false;
   Timer? _delayTimer;
   Timer? _minimumTimer;
   DateTime? _loadingShownAt;
@@ -57,50 +60,105 @@ class _SteadyStateViewState<T> extends State<SteadyStateView<T>> {
   @override
   void initState() {
     super.initState();
-    _visibleState = widget.state is SteadyLoading<T>
-        ? _fallbackFor(widget.state as SteadyLoading<T>)
-        : widget.state;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted && widget.state is SteadyLoading<T>) {
-        _handleState(widget.state);
-      }
-    });
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final policy = _policy;
+    if (!_initialized) {
+      _initialized = true;
+      _appliedPolicy = policy;
+      _visibleState = widget.state is SteadyLoading<T>
+          ? _fallbackFor(widget.state as SteadyLoading<T>)
+          : widget.state;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && widget.state is SteadyLoading<T>) {
+          _handleState(widget.state);
+        }
+      });
+      return;
+    }
+    if (!_samePolicy(_appliedPolicy, policy)) {
+      _appliedPolicy = policy;
+      _handleState(widget.state, restartLoadingDelay: true);
+    }
   }
 
   @override
   void didUpdateWidget(covariant SteadyStateView<T> oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.state != widget.state) _handleState(widget.state);
+    final policy = _policy;
+    final policyChanged = !_samePolicy(_appliedPolicy, policy);
+    if (policyChanged) _appliedPolicy = policy;
+    if (oldWidget.state != widget.state || policyChanged) {
+      _handleState(widget.state, restartLoadingDelay: policyChanged);
+    }
   }
 
+  bool _samePolicy(
+    SteadyTransitionPolicy first,
+    SteadyTransitionPolicy second,
+  ) =>
+      first.loadingDelay == second.loadingDelay &&
+      first.minimumLoadingDuration == second.minimumLoadingDuration &&
+      first.transitionDuration == second.transitionDuration &&
+      first.keepPreviousData == second.keepPreviousData &&
+      first.stabilizeLayout == second.stabilizeLayout;
+
   SteadyAsyncState<T> _fallbackFor(SteadyLoading<T> loading) {
-    if (loading.hasPreviousValue) {
+    if (_policy.keepPreviousData && loading.hasPreviousValue) {
       return SteadyAsyncState<T>.data(loading.previousValue as T);
     }
     return SteadyAsyncState<T>.idle();
   }
 
-  void _handleState(SteadyAsyncState<T> incoming) {
-    _delayTimer?.cancel();
+  void _handleState(
+    SteadyAsyncState<T> incoming, {
+    bool restartLoadingDelay = false,
+  }) {
     if (incoming is SteadyLoading<T>) {
+      final delayPending = _delayTimer?.isActive ?? false;
+      if (restartLoadingDelay) _delayTimer?.cancel();
+      _suppressTransition = !_policy.keepPreviousData;
+      final visibleLoading = _policy.keepPreviousData
+          ? incoming
+          : SteadyLoading<T>(
+              phase: incoming.phase, progress: incoming.progress);
       _minimumTimer?.cancel();
       if (_visibleState is SteadyLoading<T>) {
-        setState(() => _visibleState = incoming);
+        _delayTimer?.cancel();
+        setState(() => _visibleState = visibleLoading);
         return;
       }
+      final fallback = _fallbackFor(incoming);
+      if (_visibleState != fallback) {
+        setState(() => _visibleState = fallback);
+      }
+      if (delayPending && !restartLoadingDelay) return;
       final delay = _policy.loadingDelay;
       if (delay == Duration.zero) {
-        _showLoading(incoming);
+        _showLoading(visibleLoading);
       } else {
         _delayTimer = Timer(delay, () {
           if (mounted && widget.state is SteadyLoading<T>) {
-            _showLoading(widget.state as SteadyLoading<T>);
+            final latest = widget.state as SteadyLoading<T>;
+            _showLoading(
+              _policy.keepPreviousData
+                  ? latest
+                  : SteadyLoading<T>(
+                      phase: latest.phase,
+                      progress: latest.progress,
+                    ),
+            );
           }
         });
       }
       return;
     }
 
+    _delayTimer?.cancel();
+    _suppressTransition = false;
     if (_visibleState is SteadyLoading<T> && _loadingShownAt != null) {
       final elapsed = DateTime.now().difference(_loadingShownAt!);
       final remaining = _policy.minimumLoadingDuration - elapsed;
@@ -118,6 +176,7 @@ class _SteadyStateViewState<T> extends State<SteadyStateView<T>> {
 
   void _showLoading(SteadyLoading<T> loading) {
     _loadingShownAt = DateTime.now();
+    _suppressTransition = false;
     setState(() => _visibleState = loading);
   }
 
@@ -160,8 +219,9 @@ class _SteadyStateViewState<T> extends State<SteadyStateView<T>> {
   Widget build(BuildContext context) {
     final media = MediaQuery.maybeOf(context);
     final disableAnimations = media?.disableAnimations ?? false;
-    final duration =
-        disableAnimations ? Duration.zero : _policy.transitionDuration;
+    final duration = disableAnimations || _suppressTransition
+        ? Duration.zero
+        : _policy.transitionDuration;
     final child = KeyedSubtree(
       key: ValueKey<Object>(_visibleState),
       child: _buildVisible(context),

@@ -321,6 +321,25 @@ void main() {
     controller.dispose();
   });
 
+  test('cursor cycles become append errors', () async {
+    final controller = SteadyPagedController<int, String>(
+      firstPageKey: 'A',
+      loadPage: (key) async => switch (key) {
+        'A' => const SteadyPage(items: [1], nextKey: 'B'),
+        'B' => const SteadyPage(items: [2], nextKey: 'A'),
+        _ => const SteadyPage(items: []),
+      },
+    );
+
+    await controller.loadInitial();
+    await controller.loadMore();
+
+    expect(controller.value.items, [1]);
+    expect(controller.value.appendError, isTrue);
+    expect(controller.value.error, isA<SteadyPaginationException>());
+    controller.dispose();
+  });
+
   test('removeWhere and removeByKey retain the next page key', () async {
     final controller = SteadyPagedController<int, int>(
       firstPageKey: 0,

@@ -1,13 +1,13 @@
 # Release runbook
 
-Version 0.2.0 is published core-first, followed by compatible adapter patches.
+Version 0.2.1 is a core patch release. Compatible adapter versions remain
+unchanged because their public APIs and constraints already support it.
 
 1. Run `tool/verify.ps1` and resolve every warning.
 2. Confirm CI passes on minimum, latest, Windows, and macOS jobs.
-3. Run `dart pub publish --dry-run` inside each package, in core-first order.
-4. Publish or tag `steady_async 0.2.0` first.
-5. Publish or tag `steady_async_riverpod 0.1.1`, then
-   `steady_async_bloc 0.1.1`.
+3. Run `dart pub publish --dry-run` inside `packages/steady_async`.
+4. Publish or tag `steady_async 0.2.1`.
+5. Do not republish the unchanged adapter versions.
 6. GitHub trusted publishing uses repository
    `MohammedSafwan10/steady_async` and these tag patterns:
    - `steady_async-v{{version}}`

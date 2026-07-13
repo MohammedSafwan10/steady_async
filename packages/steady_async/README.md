@@ -15,7 +15,7 @@ policy while remaining independent of Provider, Riverpod, BLoC, and GetX.
 
 ```yaml
 dependencies:
-  steady_async: ^0.2.0
+  steady_async: ^0.2.1
 ```
 
 Flutter 3.22+ and Dart 3.4+ are supported.
@@ -89,7 +89,8 @@ pages.removeByKey(deletedPostId);
 ```
 
 Paged list, grid, and sliver widgets accept custom loading, initial-error,
-append-loading, and append-error builders while retaining Material defaults.
+retained refresh-error, append-loading, and append-error builders while
+retaining Material defaults.
 Every controller operation becomes a safe no-op after disposal.
 
 ## Customize globally
@@ -97,7 +98,7 @@ Every controller operation becomes a safe no-op after disposal.
 ```dart
 SteadyTheme(
   data: const SteadyThemeData(
-    policy: SteadyTransitionPolicy(loaderDelay: Duration(milliseconds: 150)),
+    policy: SteadyTransitionPolicy(loadingDelay: Duration(milliseconds: 150)),
   ),
   child: const MyApp(),
 )
