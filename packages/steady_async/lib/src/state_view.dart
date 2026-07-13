@@ -50,6 +50,7 @@ class _SteadyStateViewState<T> extends State<SteadyStateView<T>> {
   late SteadyTransitionPolicy _appliedPolicy;
   bool _initialized = false;
   bool _suppressTransition = false;
+  int _visibleRevision = 0;
   Timer? _delayTimer;
   Timer? _minimumTimer;
   DateTime? _loadingShownAt;
@@ -128,13 +129,11 @@ class _SteadyStateViewState<T> extends State<SteadyStateView<T>> {
       _minimumTimer?.cancel();
       if (_visibleState is SteadyLoading<T>) {
         _delayTimer?.cancel();
-        setState(() => _visibleState = visibleLoading);
+        _setVisibleState(visibleLoading);
         return;
       }
       final fallback = _fallbackFor(incoming);
-      if (_visibleState != fallback) {
-        setState(() => _visibleState = fallback);
-      }
+      _setVisibleState(fallback);
       if (delayPending && !restartLoadingDelay) return;
       final delay = _policy.loadingDelay;
       if (delay == Duration.zero) {
@@ -165,19 +164,27 @@ class _SteadyStateViewState<T> extends State<SteadyStateView<T>> {
       if (remaining > Duration.zero) {
         _minimumTimer?.cancel();
         _minimumTimer = Timer(remaining, () {
-          if (mounted) setState(() => _visibleState = widget.state);
+          if (mounted) _setVisibleState(widget.state);
         });
         return;
       }
     }
     _loadingShownAt = null;
-    setState(() => _visibleState = incoming);
+    _setVisibleState(incoming);
   }
 
   void _showLoading(SteadyLoading<T> loading) {
     _loadingShownAt = DateTime.now();
     _suppressTransition = false;
-    setState(() => _visibleState = loading);
+    _setVisibleState(loading);
+  }
+
+  void _setVisibleState(SteadyAsyncState<T> state) {
+    if (_visibleState == state) return;
+    setState(() {
+      _visibleState = state;
+      _visibleRevision++;
+    });
   }
 
   bool _isEmpty(T value) {
@@ -223,7 +230,7 @@ class _SteadyStateViewState<T> extends State<SteadyStateView<T>> {
         ? Duration.zero
         : _policy.transitionDuration;
     final child = KeyedSubtree(
-      key: ValueKey<Object>(_visibleState),
+      key: ValueKey<int>(_visibleRevision),
       child: _buildVisible(context),
     );
     final switched = AnimatedSwitcher(duration: duration, child: child);
