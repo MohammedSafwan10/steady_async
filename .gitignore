@@ -6,3 +6,4 @@ coverage/
 doc/api/
 *.iml
 *.log
+pubspec_overrides.yaml
