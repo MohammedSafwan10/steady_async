@@ -7,8 +7,8 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(seconds: 2));
 
-    expect(find.textContaining('Your API'), findsOneWidget);
-    expect(find.textContaining('Your loading UI'), findsOneWidget);
+    expect(find.textContaining('Loading, retry'), findsOneWidget);
+    expect(find.text('Request lab'), findsOneWidget);
     expect(find.text('steady_async'), findsWidgets);
   });
 }
