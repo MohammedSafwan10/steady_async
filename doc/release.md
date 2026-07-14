@@ -7,16 +7,21 @@ The prepared release set is `steady_async 0.3.0`,
 2. Confirm CI passes on minimum, latest, Windows, and macOS jobs.
 3. Review the live showcase and `doc/migration.md`; publishing requires the
    maintainer's explicit approval after that review.
-4. Run clean `dart pub publish --dry-run` checks in all three package folders.
-5. Publish or tag core first, then Riverpod, then BLoC.
-6. GitHub trusted publishing uses repository
+4. Verify the showcase custom domain succeeds over HTTPS without bypassing a
+   certificate warning.
+5. Run a clean core `dart pub publish --dry-run`, then publish or tag core.
+6. Wait until pub.dev resolves `steady_async 0.3.0`. Remove or omit each
+   adapter's local `pubspec_overrides.yaml`, run `flutter pub get` and
+   `dart pub publish --dry-run` against the published core, then tag Riverpod
+   and BLoC separately.
+7. GitHub trusted publishing uses repository
    `MohammedSafwan10/steady_async` and these tag patterns:
    - `steady_async-v{{version}}`
    - `steady_async_riverpod-v{{version}}`
    - `steady_async_bloc-v{{version}}`
-7. Releases are triggered by matching tags after the pubspec and
+8. Releases are triggered by matching tags after the pubspec and
    changelog versions are committed.
-8. A push to `main` updates source and the showcase. It does not update pub.dev
+9. A push to `main` updates source and the showcase. It does not update pub.dev
    unless a matching trusted-publishing tag is created.
 
 ## Demo DNS
