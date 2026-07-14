@@ -1,28 +1,24 @@
 # steady_async
 
-Calm, production-ready async UX for Flutter. `steady_async` prevents flashing
-spinners, keeps existing content visible during refresh, ignores stale results,
-and provides consistent retry, action, and pagination states.
+Async UI infrastructure for Flutter: loader timing, retained refresh data,
+retries, timeouts, real cancellation, actions, pagination, optimistic updates,
+and stale-result protection.
 
-## Why use it?
-
-A normal `FutureBuilder` exposes snapshots; your app still has to solve loader
-timing, refresh continuity, retry safety, stale completions, empty states,
-accessibility, and motion. `steady_async` makes those behaviors one reusable
-policy while remaining independent of Provider, Riverpod, BLoC, and GetX.
+`steady_async` does not replace Riverpod, BLoC, Provider, GetX, or `setState`.
+It handles the request and UI edge cases around them.
 
 ## Install
 
 ```yaml
 dependencies:
-  steady_async: ^0.2.2
+  steady_async: ^0.3.0
 ```
 
-Flutter 3.22+ and Dart 3.4+ are supported.
+Requires Flutter 3.22.3+ and Dart 3.4+.
 
-## Future
+## Load a screen
 
-Pass a factory, not an already-created Future, so retry is safe:
+Pass a factory so retry can create a new request:
 
 ```dart
 SteadyAsyncBuilder<List<User>>(
@@ -35,18 +31,71 @@ SteadyAsyncBuilder<List<User>>(
 )
 ```
 
-Fast operations do not flash a loader. Refreshes preserve previous content by
-default. Use `SteadyAsyncController` when you need explicit refresh or reload:
+Fast requests skip the spinner. Refresh keeps existing data visible. Obsolete
+results after reload, reset, or disposal cannot replace newer state.
+
+## Retry, timeout, and real cancellation
+
+Automatic retry and timeout are disabled unless configured:
 
 ```dart
-final controller = SteadyAsyncController(api.fetchUsers);
-
-await controller.load();
-await controller.refresh();
-await controller.retry();
+final controller = SteadyAsyncController<User>(
+  api.fetchUser,
+  requestPolicy: SteadyRequestPolicy(
+    timeout: const Duration(seconds: 8),
+    retry: SteadyRetryPolicy.exponential(
+      maxAttempts: 3, // includes the first call
+      shouldRetry: (failure) => failure.error is NetworkException,
+    ),
+  ),
+);
 ```
 
-## Async actions
+Ordinary Dart futures cannot be cancelled. When the data client has a real
+cancel API, expose it explicitly:
+
+```dart
+final controller = SteadyAsyncController<User>.cancellable(
+  () {
+    final request = api.startUserRequest();
+    return SteadyCancellableOperation(
+      future: request.result,
+      cancel: request.cancel,
+    );
+  },
+  requestPolicy: const SteadyRequestPolicy(
+    timeout: Duration(seconds: 8),
+  ),
+);
+```
+
+Replacement, timeout, reset, and disposal call `cancel` once. Normal Future
+factories still use generation guards, without claiming to cancel the work.
+
+## Map application errors
+
+Default error surfaces can share application-specific copy and accessibility:
+
+```dart
+SteadyTheme(
+  data: SteadyThemeData(
+    errorMapper: (context, failure) => switch (failure.error) {
+      NetworkException() => const SteadyErrorPresentation(
+          message: 'You appear to be offline.',
+          retryLabel: 'Try again',
+          semanticsLabel: 'Network request failed',
+        ),
+      _ => const SteadyErrorPresentation(message: 'Could not load this page.'),
+    },
+  ),
+  child: const MyApp(),
+)
+```
+
+Custom error builders keep receiving the raw typed state and bypass this
+presentation layer.
+
+## Async actions and optimistic actions
 
 ```dart
 SteadyButton<void>(
@@ -56,57 +105,115 @@ SteadyButton<void>(
 )
 ```
 
-Duplicate taps are dropped by default. Choose `latestWins` or `sequential` for
-searches and queues.
-
-## Pagination
+Duplicate taps are dropped by default. `latestWins` and `sequential` are also
+available. Application-owned state can participate in the same transaction:
 
 ```dart
-final pages = SteadyPagedController<Post, String>(
-  firstPageKey: 'first',
-  loadPage: api.fetchPosts,
+final change = SteadyOptimisticHandle.apply(
+  apply: () => cart.remove(item),
+  rollback: () => cart.insert(item),
 );
 
-SteadyPagedListView<Post, String>(
+await deleteController.runOptimistic(change);
+```
+
+Success commits; sync/async failure and cancellable timeout roll back. A
+dropped call rolls back immediately because no server request started.
+
+## Pagination, cache hydration, and source changes
+
+```dart
+final pages = SteadyPagedController<Post, String?>(
+  firstPageKey: null,
+  sourceKey: signedInUser.id,
+  seed: SteadyPagedSeed(
+    items: repository.cachedPosts,
+    nextKey: repository.cachedCursor,
+    lastUpdatedAt: repository.cacheTime,
+  ),
+  itemKey: (post) => post.id,
+  loadPage: repository.fetchPosts,
+);
+```
+
+The seed is visible immediately and refreshes once on `loadInitial()` by
+default. Storage remains application-owned; Hive, Isar, SQLite, Firebase, and
+encrypted stores do not become package dependencies.
+
+Replace an authenticated user, workspace, or query atomically:
+
+```dart
+await pages.replaceSource(
+  sourceKey: nextUser.id,
+  firstPageKey: null,
+  loadPage: nextRepository.fetchPosts,
+  seed: nextRepository.cachedSeed,
+  // clear is the default and prevents cross-user data leakage.
+  transition: SteadySourceTransition.clear,
+);
+```
+
+Use `retain` only for safe filter/search transitions where showing old content
+briefly is acceptable.
+
+## Immediate and optimistic list mutations
+
+With `itemKey` configured:
+
+```dart
+pages.insert(createdPost);
+pages.updateByKey(post.id, (current) => current.copyWith(title: title));
+pages.removeByKey(post.id);
+
+final removal = pages.optimisticRemoveByKey(post.id);
+try {
+  await repository.delete(post.id);
+  removal.commit();
+} catch (_) {
+  removal.rollback();
+}
+```
+
+Pending optimistic overlays survive refresh and append, replay in creation
+order, and are invalidated by reset, source replacement, or disposal.
+
+## Pagination widgets
+
+```dart
+SteadyPagedListView<Post, String?>(
   controller: pages,
   itemBuilder: (context, post, index) => PostTile(post),
 )
 ```
 
-The controller supports cursor or offset keys, guards overlapping requests,
-retains items after append failures, rejects non-advancing cursors, and retries
-the failed page. Local removal is available when a dismissed item must disappear
-before the next refresh:
+List, grid, sliver list, and sliver grid variants include underfilled-page
+prefetch, retained refresh errors, append retry, final-page detection, cursor
+cycle protection, and replaceable loading/error builders.
+
+## Request telemetry
 
 ```dart
-final pages = SteadyPagedController<Post, String>(
-  firstPageKey: 'first',
-  itemKey: (post) => post.id,
-  loadPage: api.fetchPosts,
-);
-
-pages.removeByKey(deletedPostId);
+class RequestObserver implements SteadyObserver {
+  @override
+  void onEvent(SteadyLifecycleEvent event) {
+    analytics.record(event.kind.name, event.elapsed);
+  }
+}
 ```
 
-Paged list, grid, and sliver widgets accept custom loading, initial-error,
-retained refresh-error, append-loading, and append-error builders while
-retaining Material defaults.
-Every controller operation becomes a safe no-op after disposal.
+Events contain operation IDs, type, attempts, timing, label, and failure
+metadata. Observer failures expose only the exception type and request metadata;
+the raw exception remains available on controller state and is never forwarded
+to telemetry. Events never contain response values, list items, cursors, or
+source keys. Observer errors are reported through Flutter diagnostics and cannot
+alter request state.
 
-## Customize globally
+## State metadata
 
-```dart
-SteadyTheme(
-  data: const SteadyThemeData(
-    policy: SteadyTransitionPolicy(loadingDelay: Duration(milliseconds: 150)),
-  ),
-  child: const MyApp(),
-)
-```
+Async, action, and paged states expose failure metadata, attempt timestamps,
+last successful update time, and deterministic `isStale(maximumAge, now: ...)`.
+All controller timestamps are UTC; tests can inject `SteadyClock`.
 
-All loading, empty, error, retry, transition, timing, and empty-predicate APIs
-can be replaced. Built-in messages support English, Hindi, Arabic, Spanish,
-French, German, Brazilian Portuguese, Simplified Chinese, and Japanese.
-
-See the [interactive showcase](https://steady-async.nexdark.com) and the
-[repository](https://github.com/MohammedSafwan10/steady_async).
+See the [interactive showcase](https://steady-async.nexdark.com),
+[migration guide](../../doc/migration.md), and
+[Riverpod/Firestore recipe](../../doc/riverpod-firestore-pagination.md).

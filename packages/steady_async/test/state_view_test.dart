@@ -353,6 +353,100 @@ void main() {
     second.dispose();
   });
 
+  testWidgets('inline cancellable loader survives an ordinary parent rebuild',
+      (tester) async {
+    final result = Completer<int>();
+    var calls = 0;
+    var cancellations = 0;
+    var rebuilds = 0;
+    late StateSetter rebuild;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: StatefulBuilder(
+          builder: (context, setState) {
+            rebuild = setState;
+            return Column(
+              children: [
+                Text('$rebuilds'),
+                SteadyAsyncBuilder<int>.cancellable(
+                  load: () {
+                    calls++;
+                    return SteadyCancellableOperation(
+                      future: result.future,
+                      cancel: () => cancellations++,
+                    );
+                  },
+                  dataBuilder: (_, value) => Text('value $value'),
+                ),
+              ],
+            );
+          },
+        ),
+      ),
+    );
+    await tester.pump();
+    rebuild(() => rebuilds++);
+    await tester.pump();
+
+    expect(calls, 1);
+    expect(cancellations, 0);
+    result.complete(7);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.text('value 7'), findsOneWidget);
+  });
+
+  testWidgets('inline cancellable action keeps running across parent rebuild',
+      (tester) async {
+    final result = Completer<int>();
+    var calls = 0;
+    var cancellations = 0;
+    var rebuilds = 0;
+    late StateSetter rebuild;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: StatefulBuilder(
+          builder: (context, setState) {
+            rebuild = setState;
+            return Column(
+              children: [
+                Text('$rebuilds'),
+                SteadyActionBuilder<int>.cancellable(
+                  action: () {
+                    calls++;
+                    return SteadyCancellableOperation(
+                      future: result.future,
+                      cancel: () => cancellations++,
+                    );
+                  },
+                  builder: (context, state, run) => TextButton(
+                    onPressed: run,
+                    child: Text(state.status.name),
+                  ),
+                ),
+              ],
+            );
+          },
+        ),
+      ),
+    );
+    await tester.tap(find.text('idle'));
+    await tester.pump();
+    expect(find.text('running'), findsOneWidget);
+
+    rebuild(() => rebuilds++);
+    await tester.pump();
+    expect(find.text('running'), findsOneWidget);
+    expect(calls, 1);
+    expect(cancellations, 0);
+
+    result.complete(7);
+    await tester.pump();
+    expect(find.text('success'), findsOneWidget);
+  });
+
   testWidgets('initial non-idle external controller is not auto-started', (
     tester,
   ) async {

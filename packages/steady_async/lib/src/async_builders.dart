@@ -5,6 +5,7 @@ import 'package:flutter/widgets.dart';
 import 'async_controller.dart';
 import 'async_state.dart';
 import 'policy.dart';
+import 'request.dart';
 import 'state_view.dart';
 
 /// Future-powered convenience wrapper around [SteadyStateView].
@@ -21,10 +22,33 @@ class SteadyAsyncBuilder<T> extends StatefulWidget {
     this.idleBuilder,
     this.isEmpty,
     this.policy,
+    this.requestPolicy = const SteadyRequestPolicy(),
+    this.observer,
+    this.operationLabel,
     super.key,
-  });
+  }) : cancellableLoad = null;
+
+  SteadyAsyncBuilder.cancellable({
+    required SteadyCancellableLoader<T> load,
+    required this.dataBuilder,
+    this.controller,
+    this.autoStart = true,
+    this.reloadOnLoaderChange = false,
+    this.loadingBuilder,
+    this.emptyBuilder,
+    this.errorBuilder,
+    this.idleBuilder,
+    this.isEmpty,
+    this.policy,
+    this.requestPolicy = const SteadyRequestPolicy(),
+    this.observer,
+    this.operationLabel,
+    super.key,
+  })  : cancellableLoad = load,
+        load = (() => load().future);
 
   final SteadyLoader<T> load;
+  final SteadyCancellableLoader<T>? cancellableLoad;
   final SteadyDataBuilder<T> dataBuilder;
   final SteadyAsyncController<T>? controller;
   final bool autoStart;
@@ -35,6 +59,9 @@ class SteadyAsyncBuilder<T> extends StatefulWidget {
   final WidgetBuilder? idleBuilder;
   final bool Function(T value)? isEmpty;
   final SteadyTransitionPolicy? policy;
+  final SteadyRequestPolicy requestPolicy;
+  final SteadyObserver? observer;
+  final String? operationLabel;
 
   @override
   State<SteadyAsyncBuilder<T>> createState() => _SteadyAsyncBuilderState<T>();
@@ -59,18 +86,40 @@ class _SteadyAsyncBuilderState<T> extends State<SteadyAsyncBuilder<T>> {
 
   void _attachController() {
     _ownsController = widget.controller == null;
-    _controller = widget.controller ?? SteadyAsyncController<T>(widget.load);
-    _controller.updateLoader(widget.load);
+    final cancellable = widget.cancellableLoad;
+    _controller = widget.controller ??
+        (cancellable == null
+            ? SteadyAsyncController<T>(
+                widget.load,
+                requestPolicy: widget.requestPolicy,
+                observer: widget.observer,
+                operationLabel: widget.operationLabel,
+              )
+            : SteadyAsyncController<T>.cancellable(
+                cancellable,
+                requestPolicy: widget.requestPolicy,
+                observer: widget.observer,
+                operationLabel: widget.operationLabel,
+              ));
+    if (cancellable == null) {
+      _controller.updateLoader(widget.load);
+    } else {
+      _controller.updateCancellableLoader(cancellable);
+    }
   }
 
   @override
   void didUpdateWidget(covariant SteadyAsyncBuilder<T> oldWidget) {
     super.didUpdateWidget(oldWidget);
     final controllerChanged = oldWidget.controller != widget.controller;
-    if (controllerChanged) {
+    final ownedConfigurationChanged = _ownsController &&
+        (oldWidget.requestPolicy != widget.requestPolicy ||
+            oldWidget.observer != widget.observer ||
+            oldWidget.operationLabel != widget.operationLabel);
+    if (controllerChanged || ownedConfigurationChanged) {
       if (_ownsController) _controller.dispose();
       _attachController();
-      if (oldWidget.load != widget.load && widget.reloadOnLoaderChange) {
+      if (_loaderChanged(oldWidget) && widget.reloadOnLoaderChange) {
         unawaited(_controller.reload());
       } else if (widget.autoStart && _controller.value.isIdle) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -80,12 +129,22 @@ class _SteadyAsyncBuilderState<T> extends State<SteadyAsyncBuilder<T>> {
         });
       }
     } else {
-      _controller.updateLoader(widget.load);
-      if (oldWidget.load != widget.load && widget.reloadOnLoaderChange) {
+      final cancellable = widget.cancellableLoad;
+      if (cancellable == null) {
+        _controller.updateLoader(widget.load);
+      } else {
+        _controller.updateCancellableLoader(cancellable);
+      }
+      if (_loaderChanged(oldWidget) && widget.reloadOnLoaderChange) {
         unawaited(_controller.reload());
       }
     }
   }
+
+  bool _loaderChanged(SteadyAsyncBuilder<T> oldWidget) =>
+      oldWidget.cancellableLoad != null || widget.cancellableLoad != null
+          ? oldWidget.cancellableLoad != widget.cancellableLoad
+          : oldWidget.load != widget.load;
 
   @override
   Widget build(BuildContext context) {
@@ -157,19 +216,28 @@ class _SteadyStreamBuilderState<T> extends State<SteadyStreamBuilder<T>> {
     unawaited(_subscription?.cancel());
     final previous = _state.valueOrNull;
     final hasPrevious = _state.hasValue;
+    final previousUpdatedAt = _state.lastUpdatedAt;
+    final attemptAt = DateTime.now().toUtc();
     setState(() {
       _state = SteadyAsyncState<T>.loading(
         previousValue: previous,
         hasPreviousValue: hasPrevious,
         phase:
             refresh ? SteadyLoadingPhase.refresh : SteadyLoadingPhase.initial,
+        previousUpdatedAt: previousUpdatedAt,
+        lastAttemptAt: attemptAt,
       );
     });
     try {
       _subscription = widget.stream().listen(
         (value) {
           if (mounted && generation == _generation) {
-            setState(() => _state = SteadyAsyncState<T>.data(value));
+            setState(
+              () => _state = SteadyAsyncState<T>.data(
+                value,
+                updatedAt: DateTime.now().toUtc(),
+              ),
+            );
           }
         },
         onError: (Object error, StackTrace stackTrace) {
@@ -182,6 +250,15 @@ class _SteadyStreamBuilderState<T> extends State<SteadyStreamBuilder<T>> {
                 stackTrace: stackTrace,
                 previousValue: latestValue,
                 hasPreviousValue: hasLatestValue,
+                failure: SteadyFailure.external(
+                  error,
+                  stackTrace: stackTrace,
+                  operation: refresh
+                      ? SteadyOperationKind.refresh
+                      : SteadyOperationKind.initialLoad,
+                ),
+                previousUpdatedAt: _state.lastUpdatedAt,
+                lastAttemptAt: attemptAt,
               );
             });
           }
@@ -195,6 +272,15 @@ class _SteadyStreamBuilderState<T> extends State<SteadyStreamBuilder<T>> {
             stackTrace: stackTrace,
             previousValue: previous,
             hasPreviousValue: hasPrevious,
+            failure: SteadyFailure.external(
+              error,
+              stackTrace: stackTrace,
+              operation: refresh
+                  ? SteadyOperationKind.refresh
+                  : SteadyOperationKind.initialLoad,
+            ),
+            previousUpdatedAt: previousUpdatedAt,
+            lastAttemptAt: attemptAt,
           );
         });
       }

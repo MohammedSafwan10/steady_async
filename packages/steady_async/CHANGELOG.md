@@ -1,3 +1,19 @@
+## 0.3.0
+
+- Added typed failure metadata, sanitized observer failure metadata, retry
+  policies, per-operation timeouts, real
+  cancellable-operation factories, UTC request timestamps, and staleness APIs.
+- Added payload-free lifecycle observation for request, cancellation, source,
+  and optimistic transaction events.
+- Added application error mapping for default async, action, and pagination UI.
+- Added seeded pagination hydration and atomic clear/retain source replacement.
+- Added immediate insert/update and transactional optimistic insert/update/remove
+  with refresh/append rebasing and stale-handle invalidation.
+- Added optimistic action execution across drop, latest-wins, and sequential
+  concurrency policies.
+- Added `SteadyPagedSliverGrid` and item-threshold prefetch for paged slivers.
+- Preserved raw error access and existing Future factories for 0.x migration.
+
 ## 0.2.2
 
 - Made request cancellation leave loading by restoring retained data or idle.

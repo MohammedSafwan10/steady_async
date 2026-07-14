@@ -18,6 +18,8 @@ void main() {
     final mapped = AsyncError<int>(error, StackTrace.empty).toSteadyState();
     expect(mapped, isA<SteadyError<int>>());
     expect((mapped as SteadyError<int>).error, same(error));
+    expect(mapped.failure?.operation, SteadyOperationKind.initialLoad);
+    expect(mapped.failure?.error, same(error));
   });
 
   test('autoDispose owns a nullable-cursor paged controller', () async {

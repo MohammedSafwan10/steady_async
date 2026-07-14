@@ -1,3 +1,11 @@
+## 0.2.0
+
+- Updated the core constraint to `steady_async >=0.3.0 <0.4.0`.
+- Maps Riverpod errors to typed failure metadata and preserves initial,
+  refresh, and reload operation origin.
+- Keeps Riverpod-owned timestamps unknown while the core records when an
+  external failure is observed.
+
 ## 0.1.1
 
 - Added a tested nullable-cursor `autoDispose` pagination example.

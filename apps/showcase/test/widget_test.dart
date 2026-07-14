@@ -83,7 +83,10 @@ void main() {
     await tester.pump(const Duration(milliseconds: 1300));
 
     expect(find.text('Could not load projects'), findsOneWidget);
-    await tester.drag(find.byType(CustomScrollView), const Offset(0, 180));
+    await tester.drag(
+      find.byType(CustomScrollView).first,
+      const Offset(0, 180),
+    );
     await tester.pumpAndSettle();
     await tester.tap(find.text('Retry'));
     await tester.pump(const Duration(milliseconds: 1300));

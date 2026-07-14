@@ -12,9 +12,19 @@ final notesPagerProvider = Provider.autoDispose<
   );
   final repository = ref.watch(notesRepositoryProvider);
 
+  final cached = repository.readCachedNotes(userId);
+
   final controller = SteadyPagedController<
       Note, DocumentSnapshot<Map<String, dynamic>>?>(
     firstPageKey: null,
+    sourceKey: userId,
+    seed: cached == null
+        ? null
+        : SteadyPagedSeed(
+            items: cached.items,
+            nextKey: cached.lastDocument,
+            lastUpdatedAt: cached.savedAt,
+          ),
     itemKey: (note) => note.id,
     loadPage: (cursor) async {
       if (userId == null) return const SteadyPage(items: []);
@@ -62,3 +72,9 @@ the old controller and its eventual Firestore completion is ignored.
 Firestore is intentionally not a dependency of `steady_async` or
 `steady_async_riverpod`; `DocumentSnapshot` is simply the application's generic
 page-key type.
+
+If the repository exposes real request cancellation, use
+`SteadyPagedController.cancellable` and return a
+`SteadyCancellableOperation<SteadyPage<Note, DocumentSnapshot<...>?>>`. Do not
+wrap an ordinary Future with a fake cancel callback; generation guards already
+prevent its obsolete completion from changing state.

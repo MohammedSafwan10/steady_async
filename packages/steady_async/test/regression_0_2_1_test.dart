@@ -50,11 +50,13 @@ void main() {
       expect(controller.value, isA<SteadyLoading<int>>());
 
       controller.cancel();
-      expect(controller.value, const SteadyAsyncState<int>.data(7));
+      expect(controller.value.valueOrNull, 7);
+      final retainedTimestamp = controller.value.lastUpdatedAt;
 
       pending.complete(99);
       await refresh;
-      expect(controller.value, const SteadyAsyncState<int>.data(7));
+      expect(controller.value.valueOrNull, 7);
+      expect(controller.value.lastUpdatedAt, retainedTimestamp);
       controller.dispose();
     });
 

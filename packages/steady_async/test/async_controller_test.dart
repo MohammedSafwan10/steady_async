@@ -20,7 +20,7 @@ void main() {
     first.complete('stale');
     await firstRun;
 
-    expect(controller.value, const SteadyAsyncState<String>.data('fresh'));
+    expect(controller.value.valueOrNull, 'fresh');
     controller.dispose();
   });
 

@@ -2,9 +2,9 @@
 
 Your API is not slow. Your loading UI is noisy.
 
-`steady_async` is a Flutter package family for calm, predictable async UX:
-delayed loaders, preserved refresh content, safe retries, stale-result guards,
-async actions, and production-ready pagination.
+`steady_async` is a Flutter package family for predictable async UX: delayed
+loaders, retained refresh content, retries, timeouts, real cancellation,
+optimistic actions, source-safe pagination, and stale-result guards.
 
 [Live showcase](https://steady-async.nexdark.com) ·
 [Core package](packages/steady_async) ·
@@ -29,6 +29,8 @@ and separately versioned so applications install only what they use.
 - Preserve previous data through refresh and append failures.
 - Ignore obsolete completions after retry, reload, reset, or disposal.
 - Drop duplicate action submissions by default.
+- Keep automatic retries and timeouts off until the application enables them.
+- Clear paged content when a user, workspace, or query source changes.
 - Respect reduced-motion preferences and RTL locales.
 
 ## Repository

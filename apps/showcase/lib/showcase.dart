@@ -10,6 +10,7 @@ import 'src/clipboard/clipboard_service.dart';
 part 'src/showcase_page.dart';
 part 'src/showcase_sections.dart';
 part 'src/scenario_showcase.dart';
+part 'src/production_lab.dart';
 
 const _ink = Color(0xFF171817);
 const _paper = Color(0xFFF7F6F2);

@@ -136,6 +136,7 @@ class _ShowcasePageState extends State<ShowcasePage> {
             ),
           ),
           const SliverToBoxAdapter(child: _ScenarioShowcase()),
+          const SliverToBoxAdapter(child: _ProductionLab()),
           SliverToBoxAdapter(
             child: KeyedSubtree(key: _featuresKey, child: const _FeatureGrid()),
           ),

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'localization.dart';
 import 'policy.dart';
+import 'request.dart';
 
 @immutable
 class SteadyThemeData {
@@ -11,6 +12,7 @@ class SteadyThemeData {
     this.accentColor,
     this.indicatorSize = 28,
     this.successVisibleDuration = const Duration(milliseconds: 800),
+    this.errorMapper,
   });
 
   final SteadyTransitionPolicy policy;
@@ -18,6 +20,7 @@ class SteadyThemeData {
   final Color? accentColor;
   final double indicatorSize;
   final Duration successVisibleDuration;
+  final SteadyErrorMapper? errorMapper;
 
   SteadyThemeData copyWith({
     SteadyTransitionPolicy? policy,
@@ -25,6 +28,8 @@ class SteadyThemeData {
     Color? accentColor,
     double? indicatorSize,
     Duration? successVisibleDuration,
+    SteadyErrorMapper? errorMapper,
+    bool clearErrorMapper = false,
   }) =>
       SteadyThemeData(
         policy: policy ?? this.policy,
@@ -33,6 +38,7 @@ class SteadyThemeData {
         indicatorSize: indicatorSize ?? this.indicatorSize,
         successVisibleDuration:
             successVisibleDuration ?? this.successVisibleDuration,
+        errorMapper: clearErrorMapper ? null : errorMapper ?? this.errorMapper,
       );
 }
 

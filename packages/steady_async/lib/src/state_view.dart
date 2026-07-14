@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'async_state.dart';
 import 'localization.dart';
 import 'policy.dart';
+import 'request.dart';
 import 'theme.dart';
 
 typedef SteadyDataBuilder<T> = Widget Function(BuildContext context, T value);
@@ -125,7 +126,12 @@ class _SteadyStateViewState<T> extends State<SteadyStateView<T>> {
       final visibleLoading = _policy.keepPreviousData
           ? incoming
           : SteadyLoading<T>(
-              phase: incoming.phase, progress: incoming.progress);
+              phase: incoming.phase,
+              progress: incoming.progress,
+              previousUpdatedAt: incoming.previousUpdatedAt,
+              lastAttemptAt: incoming.lastAttemptAt,
+              attempt: incoming.attempt,
+            );
       _minimumTimer?.cancel();
       if (_visibleState is SteadyLoading<T>) {
         _delayTimer?.cancel();
@@ -148,6 +154,9 @@ class _SteadyStateViewState<T> extends State<SteadyStateView<T>> {
                   : SteadyLoading<T>(
                       phase: latest.phase,
                       progress: latest.progress,
+                      previousUpdatedAt: latest.previousUpdatedAt,
+                      lastAttemptAt: latest.lastAttemptAt,
+                      attempt: latest.attempt,
                     ),
             );
           }
@@ -335,68 +344,97 @@ class _DefaultErrorView<T> extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (!state.hasPreviousValue) {
-      return SteadyDefaultErrorView(onRetry: onRetry);
+      return SteadyDefaultErrorView(
+        onRetry: onRetry,
+        failure: state.failure ??
+            SteadyFailure.external(
+              state.error,
+              stackTrace: state.stackTrace,
+            ),
+      );
     }
-    final messages =
-        SteadyTheme.of(context).messages ?? SteadyMessages.resolve(context);
-    return Stack(
-      alignment: Alignment.bottomCenter,
-      children: [
-        dataBuilder(context, state.previousValue as T),
-        Padding(
-          padding: const EdgeInsets.all(12),
-          child: Card(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Icon(Icons.cloud_off_outlined),
-                  const SizedBox(width: 8),
-                  Flexible(child: Text(messages.error)),
-                  if (onRetry != null)
-                    TextButton(
-                      onPressed: onRetry,
-                      child: Text(messages.retry),
+    final steadyTheme = SteadyTheme.of(context);
+    final messages = steadyTheme.messages ?? SteadyMessages.resolve(context);
+    final failure = state.failure ??
+        SteadyFailure.external(state.error, stackTrace: state.stackTrace);
+    final presentation = steadyTheme.errorMapper?.call(context, failure);
+    return Semantics(
+      liveRegion: true,
+      label: presentation?.semanticsLabel,
+      child: Stack(
+        alignment: Alignment.bottomCenter,
+        children: [
+          dataBuilder(context, state.previousValue as T),
+          Padding(
+            padding: const EdgeInsets.all(12),
+            child: Card(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.cloud_off_outlined),
+                    const SizedBox(width: 8),
+                    Flexible(
+                      child: Text(presentation?.message ?? messages.error),
                     ),
-                ],
+                    if (onRetry != null && (presentation?.showRetry ?? true))
+                      TextButton(
+                        onPressed: onRetry,
+                        child: Text(
+                          presentation?.retryLabel ?? messages.retry,
+                        ),
+                      ),
+                  ],
+                ),
               ),
             ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 }
 
 class SteadyDefaultErrorView extends StatelessWidget {
-  const SteadyDefaultErrorView({this.onRetry, super.key});
+  const SteadyDefaultErrorView({this.onRetry, this.failure, super.key});
 
   final VoidCallback? onRetry;
+  final SteadyFailure? failure;
 
   @override
   Widget build(BuildContext context) {
-    final messages =
-        SteadyTheme.of(context).messages ?? SteadyMessages.resolve(context);
+    final steadyTheme = SteadyTheme.of(context);
+    final messages = steadyTheme.messages ?? SteadyMessages.resolve(context);
+    final presentation = failure == null
+        ? null
+        : steadyTheme.errorMapper?.call(context, failure!);
     final colors = Theme.of(context).colorScheme;
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.error_outline, size: 42, color: colors.error),
-            const SizedBox(height: 12),
-            Text(messages.error, textAlign: TextAlign.center),
-            if (onRetry != null) ...[
+    return Semantics(
+      liveRegion: true,
+      label: presentation?.semanticsLabel,
+      child: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.error_outline, size: 42, color: colors.error),
               const SizedBox(height: 12),
-              FilledButton.tonalIcon(
-                onPressed: onRetry,
-                icon: const Icon(Icons.refresh),
-                label: Text(messages.retry),
+              Text(
+                presentation?.message ?? messages.error,
+                textAlign: TextAlign.center,
               ),
+              if (onRetry != null && (presentation?.showRetry ?? true)) ...[
+                const SizedBox(height: 12),
+                FilledButton.tonalIcon(
+                  onPressed: onRetry,
+                  icon: const Icon(Icons.refresh),
+                  label: Text(presentation?.retryLabel ?? messages.retry),
+                ),
+              ],
             ],
-          ],
+          ),
         ),
       ),
     );

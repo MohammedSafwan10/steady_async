@@ -10,27 +10,38 @@ extension SteadyAsyncValueX<T> on AsyncValue<T> {
   SteadyAsyncState<T> toSteadyState() {
     final hasPrevious = hasValue;
     final previous = hasPrevious ? value : null;
+    final operation =
+        isRefreshing
+            ? SteadyOperationKind.refresh
+            : isReloading
+            ? SteadyOperationKind.reload
+            : SteadyOperationKind.initialLoad;
     if (isLoading) {
       final rawProgress = progress;
       final normalizedProgress = rawProgress?.toDouble().clamp(0.0, 1.0);
       return SteadyAsyncState<T>.loading(
         previousValue: previous,
         hasPreviousValue: hasPrevious,
-        phase:
-            isRefreshing
-                ? SteadyLoadingPhase.refresh
-                : isReloading
-                ? SteadyLoadingPhase.reload
-                : SteadyLoadingPhase.initial,
+        phase: switch (operation) {
+          SteadyOperationKind.refresh => SteadyLoadingPhase.refresh,
+          SteadyOperationKind.reload => SteadyLoadingPhase.reload,
+          _ => SteadyLoadingPhase.initial,
+        },
         progress: normalizedProgress,
       );
     }
     if (hasError) {
+      final failure = SteadyFailure.external(
+        error!,
+        stackTrace: stackTrace,
+        operation: operation,
+      );
       return SteadyAsyncState<T>.error(
         error!,
         stackTrace: stackTrace,
         previousValue: previous,
         hasPreviousValue: hasPrevious,
+        failure: failure,
       );
     }
     if (hasValue) return SteadyAsyncState<T>.data(value as T);

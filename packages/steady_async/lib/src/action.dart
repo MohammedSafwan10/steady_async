@@ -4,6 +4,9 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import 'localization.dart';
+import 'optimistic.dart';
+import 'request.dart';
+import 'request_engine.dart';
 import 'theme.dart';
 
 /// Visible stages of an asynchronous action.
@@ -20,18 +23,47 @@ class SteadyActionState<T> {
     this.value,
     this.error,
     this.stackTrace,
+    this.failure,
+    this.lastAttemptAt,
+    this.completedAt,
+    this.attempt = 0,
   });
 
   const SteadyActionState.idle() : this._(status: SteadyActionStatus.idle);
-  const SteadyActionState.running()
-      : this._(status: SteadyActionStatus.running);
-  const SteadyActionState.success(T value)
-      : this._(status: SteadyActionStatus.success, value: value);
-  const SteadyActionState.error(Object error, [StackTrace? stackTrace])
+  const SteadyActionState.running({DateTime? lastAttemptAt, int attempt = 1})
       : this._(
+          status: SteadyActionStatus.running,
+          lastAttemptAt: lastAttemptAt,
+          attempt: attempt,
+        );
+  const SteadyActionState.success(T value, {DateTime? completedAt})
+      : this._(
+          status: SteadyActionStatus.success,
+          value: value,
+          completedAt: completedAt,
+        );
+  const SteadyActionState.error(
+    Object error, [
+    StackTrace? stackTrace,
+    SteadyFailure? failure,
+  ]) : this._(
           status: SteadyActionStatus.error,
           error: error,
           stackTrace: stackTrace,
+          failure: failure,
+        );
+
+  /// Creates an error state with complete request metadata.
+  SteadyActionState.failure(
+    SteadyFailure failure, {
+    DateTime? lastAttemptAt,
+  }) : this._(
+          status: SteadyActionStatus.error,
+          error: failure.error,
+          stackTrace: failure.stackTrace,
+          failure: failure,
+          lastAttemptAt: lastAttemptAt ?? failure.occurredAt,
+          attempt: failure.attempt,
         );
 
   /// The current action stage.
@@ -45,6 +77,24 @@ class SteadyActionState<T> {
 
   /// Stack trace associated with [error].
   final StackTrace? stackTrace;
+  final SteadyFailure? failure;
+  final DateTime? lastAttemptAt;
+  final DateTime? completedAt;
+  final int attempt;
+
+  /// Timestamp of the most recently accepted successful action.
+  DateTime? get lastUpdatedAt => completedAt;
+
+  /// Kind of operation that produced [failure], when the state failed.
+  SteadyOperationKind? get failureOrigin => failure?.operation;
+
+  /// Calculates whether the last successful result is older than [maximumAge].
+  bool isStale(Duration maximumAge, {DateTime? now}) {
+    final updatedAt = lastUpdatedAt;
+    if (updatedAt == null) return true;
+    return (now ?? DateTime.now().toUtc()).toUtc().difference(updatedAt) >
+        maximumAge;
+  }
 
   /// Whether work is currently in progress.
   bool get isRunning => status == SteadyActionStatus.running;
@@ -58,6 +108,7 @@ class SteadyActionState<T> {
 
 /// A retry-safe factory for an asynchronous action.
 typedef SteadyAction<T> = Future<T> Function();
+typedef SteadyCancellableAction<T> = SteadyCancellableOperation<T> Function();
 
 /// Runs actions with duplicate-call protection and stale-result guards.
 class SteadyActionController<T> extends ChangeNotifier
@@ -67,77 +118,265 @@ class SteadyActionController<T> extends ChangeNotifier
     SteadyAction<T> action, {
     this.concurrency = SteadyActionConcurrency.drop,
     this.successVisibleDuration = const Duration(milliseconds: 800),
-  }) : _action = action;
+    this.requestPolicy = const SteadyRequestPolicy(),
+    this.observer,
+    this.operationLabel,
+    SteadyClock? clock,
+  })  : _action = action,
+        _cancellableAction = null,
+        _clock = clock ?? DateTime.now;
 
-  SteadyAction<T> _action;
+  SteadyActionController.cancellable(
+    SteadyCancellableAction<T> action, {
+    this.concurrency = SteadyActionConcurrency.drop,
+    this.successVisibleDuration = const Duration(milliseconds: 800),
+    this.requestPolicy = const SteadyRequestPolicy(),
+    this.observer,
+    this.operationLabel,
+    SteadyClock? clock,
+  })  : _action = null,
+        _cancellableAction = action,
+        _clock = clock ?? DateTime.now;
+
+  SteadyAction<T>? _action;
+  SteadyCancellableAction<T>? _cancellableAction;
   final SteadyActionConcurrency concurrency;
   final Duration successVisibleDuration;
+  final SteadyRequestPolicy requestPolicy;
+  final SteadyObserver? observer;
+  final String? operationLabel;
+  final SteadyClock _clock;
   SteadyActionState<T> _value = const SteadyActionState.idle();
   Future<void> _queue = Future<void>.value();
   Timer? _successTimer;
   int _generation = 0;
+  int _operationId = 0;
   bool _disposed = false;
+  final Map<SteadyRequestRunner<T>, bool> _activeRunners = {};
+  final Set<_QueuedAction<T>> _queuedActions = {};
 
   /// The latest public action state.
   @override
   SteadyActionState<T> get value => _value;
 
   /// Replaces the factory used by future calls.
-  void updateAction(SteadyAction<T> action) => _action = action;
+  void updateAction(SteadyAction<T> action) {
+    if (_disposed) return;
+    _action = action;
+    _cancellableAction = null;
+  }
+
+  void updateCancellableAction(SteadyCancellableAction<T> action) {
+    if (_disposed) return;
+    _cancellableAction = action;
+    _action = null;
+  }
 
   /// Runs or schedules the action according to [concurrency].
-  Future<T?> run() {
-    if (_disposed) return Future<T?>.value();
+  Future<T?> run() => _run(null, null);
+
+  /// Runs the action and resolves [mutation] from the actual action outcome.
+  Future<T?> runOptimistic(SteadyOptimisticHandle mutation) {
+    if (!mutation.isPending) {
+      throw StateError('runOptimistic requires a pending optimistic handle.');
+    }
+    final transactionId = ++_operationId;
+    _emitOptimistic(
+      SteadyLifecycleEventKind.optimisticApplied,
+      transactionId,
+    );
+    return _run(mutation, transactionId);
+  }
+
+  Future<T?> _run(
+    SteadyOptimisticHandle? mutation,
+    int? transactionId,
+  ) {
+    if (_disposed) {
+      if (mutation?.rollback() ?? false) {
+        _emitOptimistic(
+          SteadyLifecycleEventKind.optimisticRolledBack,
+          transactionId!,
+        );
+      }
+      return Future<T?>.value();
+    }
     if (concurrency == SteadyActionConcurrency.drop && _value.isRunning) {
+      if (mutation?.rollback() ?? false) {
+        _emitOptimistic(
+          SteadyLifecycleEventKind.optimisticRolledBack,
+          transactionId!,
+        );
+      }
       return Future<T?>.value();
     }
     if (concurrency == SteadyActionConcurrency.sequential) {
-      final completer = Completer<T?>();
+      final queued = _QueuedAction<T>(mutation, transactionId);
+      _queuedActions.add(queued);
       _queue = _queue.then((_) async {
+        if (queued.isCancelled) return;
+        _queuedActions.remove(queued);
         try {
-          completer.complete(await _execute());
+          queued.complete(await _execute(mutation, transactionId));
         } catch (error, stackTrace) {
-          completer.completeError(error, stackTrace);
+          queued.completeError(error, stackTrace);
         }
       });
-      return completer.future;
+      return queued.future;
     }
-    return _execute();
+    if (concurrency == SteadyActionConcurrency.latestWins) {
+      _stopActiveRunners();
+    }
+    return _execute(mutation, transactionId);
   }
 
-  Future<T?> _execute() async {
-    if (_disposed) return null;
+  Future<T?> _execute(
+    SteadyOptimisticHandle? mutation,
+    int? transactionId,
+  ) async {
+    if (_disposed) {
+      if (mutation?.rollback() ?? false) {
+        _emitOptimistic(
+          SteadyLifecycleEventKind.optimisticRolledBack,
+          transactionId!,
+        );
+      }
+      return null;
+    }
     _successTimer?.cancel();
     final generation = ++_generation;
-    _setValue(SteadyActionState<T>.running());
-    try {
-      final result = await Future<T>.sync(_action);
-      if (_accepts(generation)) {
-        _setValue(SteadyActionState<T>.success(result));
+    final action = _action;
+    final cancellableAction = _cancellableAction;
+    _setValue(
+      SteadyActionState<T>.running(lastAttemptAt: _now()),
+    );
+    final runner = SteadyRequestRunner<T>(
+      operationId: ++_operationId,
+      controllerType: 'action',
+      operation: SteadyOperationKind.action,
+      factory: cancellableAction ??
+          () => SteadyCancellableOperation<T>.fromFuture(
+                Future<T>.sync(action!),
+              ),
+      policy: requestPolicy,
+      clock: _clock,
+      observer: observer,
+      label: operationLabel,
+      onAttempt: (attempt, startedAt) {
+        if (_accepts(generation)) {
+          _setValue(
+            SteadyActionState<T>.running(
+              lastAttemptAt: startedAt,
+              attempt: attempt,
+            ),
+          );
+        }
+      },
+    );
+    _activeRunners[runner] = cancellableAction != null;
+    final execution = await runner.run();
+    _activeRunners.remove(runner);
+    switch (execution) {
+      case SteadyExecutionSuccess<T>(:final value, :final completedAt):
+        if (mutation?.commit() ?? false) {
+          _emitOptimistic(
+            SteadyLifecycleEventKind.optimisticCommitted,
+            transactionId!,
+          );
+        }
+        if (!_accepts(generation)) return value;
+        _setValue(
+          SteadyActionState<T>.success(value, completedAt: completedAt),
+        );
         if (successVisibleDuration > Duration.zero) {
           _successTimer = Timer(successVisibleDuration, () {
             if (_accepts(generation) && _value.isSuccess) reset();
           });
         }
-      }
-      return result;
-    } catch (error, stackTrace) {
-      if (_accepts(generation)) {
-        _setValue(SteadyActionState<T>.error(error, stackTrace));
-      }
-      return null;
+        return value;
+      case SteadyExecutionFailure<T>(:final failure):
+        if (mutation?.rollback() ?? false) {
+          _emitOptimistic(
+            SteadyLifecycleEventKind.optimisticRolledBack,
+            transactionId!,
+          );
+        }
+        if (_accepts(generation)) {
+          _setValue(
+            SteadyActionState<T>.failure(
+              failure,
+              lastAttemptAt: _value.lastAttemptAt,
+            ),
+          );
+        }
+        return null;
+      case SteadyExecutionCancelled<T>():
+        if (mutation?.rollback() ?? false) {
+          _emitOptimistic(
+            SteadyLifecycleEventKind.optimisticRolledBack,
+            transactionId!,
+          );
+        }
+        return null;
     }
   }
 
   /// Returns to idle and invalidates results from active calls.
   void reset() {
+    if (_disposed) return;
     _successTimer?.cancel();
     _successTimer = null;
     _generation++;
+    _stopActiveRunners();
+    _cancelQueuedActions();
     _setValue(SteadyActionState<T>.idle());
   }
 
   bool _accepts(int generation) => !_disposed && generation == _generation;
+
+  void _stopActiveRunners() {
+    for (final entry in _activeRunners.entries.toList()) {
+      if (entry.value) {
+        entry.key.cancel();
+      } else {
+        entry.key.stopAfterCurrent();
+      }
+    }
+  }
+
+  void _cancelQueuedActions() {
+    for (final queued in _queuedActions.toList()) {
+      if (queued.cancel()) {
+        final transactionId = queued.transactionId;
+        if (queued.mutation?.rollback() ?? false) {
+          _emitOptimistic(
+            SteadyLifecycleEventKind.optimisticRolledBack,
+            transactionId!,
+          );
+        }
+      }
+    }
+    _queuedActions.clear();
+  }
+
+  DateTime _now() => _clock().toUtc();
+
+  void _emitOptimistic(
+    SteadyLifecycleEventKind kind,
+    int transactionId,
+  ) =>
+      notifySteadyObserver(
+        observer,
+        SteadyLifecycleEvent(
+          kind: kind,
+          operationId: transactionId,
+          controllerType: 'action',
+          operation: SteadyOperationKind.action,
+          attempt: 0,
+          timestamp: _now(),
+          label: operationLabel,
+        ),
+      );
 
   void _setValue(SteadyActionState<T> next) {
     if (_disposed) return;
@@ -150,7 +389,35 @@ class SteadyActionController<T> extends ChangeNotifier
     _successTimer?.cancel();
     _disposed = true;
     _generation++;
+    _stopActiveRunners();
+    _cancelQueuedActions();
     super.dispose();
+  }
+}
+
+class _QueuedAction<T> {
+  _QueuedAction(this.mutation, this.transactionId);
+
+  final SteadyOptimisticHandle? mutation;
+  final int? transactionId;
+  final Completer<T?> _completer = Completer<T?>();
+  bool isCancelled = false;
+
+  Future<T?> get future => _completer.future;
+
+  bool cancel() {
+    if (isCancelled || _completer.isCompleted) return false;
+    isCancelled = true;
+    _completer.complete(null);
+    return true;
+  }
+
+  void complete(T? value) {
+    if (!_completer.isCompleted) _completer.complete(value);
+  }
+
+  void completeError(Object error, StackTrace stackTrace) {
+    if (!_completer.isCompleted) _completer.completeError(error, stackTrace);
   }
 }
 
@@ -170,11 +437,28 @@ class SteadyActionBuilder<T> extends StatefulWidget {
     this.controller,
     this.concurrency = SteadyActionConcurrency.drop,
     this.successVisibleDuration,
+    this.requestPolicy = const SteadyRequestPolicy(),
+    this.observer,
+    this.operationLabel,
     super.key,
-  });
+  }) : cancellableAction = null;
+
+  SteadyActionBuilder.cancellable({
+    required SteadyCancellableAction<T> action,
+    required this.builder,
+    this.controller,
+    this.concurrency = SteadyActionConcurrency.drop,
+    this.successVisibleDuration,
+    this.requestPolicy = const SteadyRequestPolicy(),
+    this.observer,
+    this.operationLabel,
+    super.key,
+  })  : cancellableAction = action,
+        action = (() => action().future);
 
   /// Retry-safe action factory.
   final SteadyAction<T> action;
+  final SteadyCancellableAction<T>? cancellableAction;
 
   /// Builds the action UI.
   final SteadyActionWidgetBuilder<T> builder;
@@ -187,6 +471,9 @@ class SteadyActionBuilder<T> extends StatefulWidget {
 
   /// Time that success UI remains visible before resetting.
   final Duration? successVisibleDuration;
+  final SteadyRequestPolicy requestPolicy;
+  final SteadyObserver? observer;
+  final String? operationLabel;
 
   @override
   State<SteadyActionBuilder<T>> createState() => _SteadyActionBuilderState<T>();
@@ -204,14 +491,32 @@ class _SteadyActionBuilderState<T> extends State<SteadyActionBuilder<T>> {
 
   void _attach() {
     _ownsController = widget.controller == null;
+    final cancellable = widget.cancellableAction;
     _controller = widget.controller ??
-        SteadyActionController<T>(
-          widget.action,
-          concurrency: widget.concurrency,
-          successVisibleDuration: widget.successVisibleDuration ??
-              const Duration(milliseconds: 800),
-        );
-    _controller.updateAction(widget.action);
+        (cancellable == null
+            ? SteadyActionController<T>(
+                widget.action,
+                concurrency: widget.concurrency,
+                successVisibleDuration: widget.successVisibleDuration ??
+                    const Duration(milliseconds: 800),
+                requestPolicy: widget.requestPolicy,
+                observer: widget.observer,
+                operationLabel: widget.operationLabel,
+              )
+            : SteadyActionController<T>.cancellable(
+                cancellable,
+                concurrency: widget.concurrency,
+                successVisibleDuration: widget.successVisibleDuration ??
+                    const Duration(milliseconds: 800),
+                requestPolicy: widget.requestPolicy,
+                observer: widget.observer,
+                operationLabel: widget.operationLabel,
+              ));
+    if (cancellable == null) {
+      _controller.updateAction(widget.action);
+    } else {
+      _controller.updateCancellableAction(cancellable);
+    }
   }
 
   @override
@@ -221,11 +526,22 @@ class _SteadyActionBuilderState<T> extends State<SteadyActionBuilder<T>> {
     final ownedConfigurationChanged = _ownsController &&
         (oldWidget.concurrency != widget.concurrency ||
             oldWidget.successVisibleDuration != widget.successVisibleDuration);
-    if (controllerChanged || ownedConfigurationChanged) {
+    final ownedRequestConfigurationChanged = _ownsController &&
+        (oldWidget.requestPolicy != widget.requestPolicy ||
+            oldWidget.observer != widget.observer ||
+            oldWidget.operationLabel != widget.operationLabel);
+    if (controllerChanged ||
+        ownedConfigurationChanged ||
+        ownedRequestConfigurationChanged) {
       if (_ownsController) _controller.dispose();
       _attach();
     } else {
-      _controller.updateAction(widget.action);
+      final cancellable = widget.cancellableAction;
+      if (cancellable == null) {
+        _controller.updateAction(widget.action);
+      } else {
+        _controller.updateCancellableAction(cancellable);
+      }
     }
   }
 
@@ -256,11 +572,31 @@ class SteadyButton<T> extends StatelessWidget {
     this.icon,
     this.concurrency = SteadyActionConcurrency.drop,
     this.style,
+    this.requestPolicy = const SteadyRequestPolicy(),
+    this.observer,
+    this.operationLabel,
     super.key,
-  });
+  }) : cancellableAction = null;
+
+  SteadyButton.cancellable({
+    required SteadyCancellableAction<T> action,
+    required this.child,
+    this.controller,
+    this.successChild,
+    this.errorChild,
+    this.icon,
+    this.concurrency = SteadyActionConcurrency.drop,
+    this.style,
+    this.requestPolicy = const SteadyRequestPolicy(),
+    this.observer,
+    this.operationLabel,
+    super.key,
+  })  : cancellableAction = action,
+        action = (() => action().future);
 
   /// Retry-safe callback invoked by the button.
   final SteadyAction<T> action;
+  final SteadyCancellableAction<T>? cancellableAction;
 
   /// Idle button content.
   final Widget child;
@@ -282,63 +618,101 @@ class SteadyButton<T> extends StatelessWidget {
 
   /// Optional Material button style.
   final ButtonStyle? style;
+  final SteadyRequestPolicy requestPolicy;
+  final SteadyObserver? observer;
+  final String? operationLabel;
 
   @override
-  Widget build(BuildContext context) => SteadyActionBuilder<T>(
-        action: action,
+  Widget build(BuildContext context) {
+    Widget builder(
+      BuildContext context,
+      SteadyActionState<T> state,
+      Future<T?> Function() run,
+    ) {
+      final steadyTheme = SteadyTheme.of(context);
+      final messages = steadyTheme.messages ?? SteadyMessages.resolve(context);
+      final failure = state.failure ??
+          (state.error == null
+              ? null
+              : SteadyFailure.external(
+                  state.error!,
+                  stackTrace: state.stackTrace,
+                  operation: SteadyOperationKind.action,
+                ));
+      final presentation = failure == null
+          ? null
+          : steadyTheme.errorMapper?.call(context, failure);
+      final content = switch (state.status) {
+        SteadyActionStatus.idle => child,
+        SteadyActionStatus.running => const SizedBox.square(
+            dimension: 18,
+            child: CircularProgressIndicator(strokeWidth: 2.4),
+          ),
+        SteadyActionStatus.success => successChild ??
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.check, size: 18),
+                const SizedBox(width: 8),
+                Text(messages.success),
+              ],
+            ),
+        SteadyActionStatus.error => errorChild ??
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.refresh, size: 18),
+                const SizedBox(width: 8),
+                Text(presentation?.retryLabel ?? messages.retry),
+              ],
+            ),
+      };
+      return Semantics(
+        liveRegion: true,
+        button: true,
+        label: presentation?.semanticsLabel,
+        child: FilledButton.icon(
+          style: style,
+          onPressed: (state.isRunning &&
+                      concurrency == SteadyActionConcurrency.drop) ||
+                  (state.hasError && !(presentation?.showRetry ?? true))
+              ? null
+              : () => unawaited(run()),
+          icon: state.status == SteadyActionStatus.idle
+              ? icon ?? const SizedBox.shrink()
+              : const SizedBox.shrink(),
+          label: AnimatedSwitcher(
+            duration: MediaQuery.maybeOf(context)?.disableAnimations ?? false
+                ? Duration.zero
+                : const Duration(milliseconds: 160),
+            child: KeyedSubtree(key: ValueKey(state.status), child: content),
+          ),
+        ),
+      );
+    }
+
+    final cancellable = cancellableAction;
+    if (cancellable != null) {
+      return SteadyActionBuilder<T>.cancellable(
+        action: cancellable,
         controller: controller,
         concurrency: concurrency,
         successVisibleDuration: SteadyTheme.of(context).successVisibleDuration,
-        builder: (context, state, run) {
-          final messages = SteadyTheme.of(context).messages ??
-              SteadyMessages.resolve(context);
-          final content = switch (state.status) {
-            SteadyActionStatus.idle => child,
-            SteadyActionStatus.running => const SizedBox.square(
-                dimension: 18,
-                child: CircularProgressIndicator(strokeWidth: 2.4),
-              ),
-            SteadyActionStatus.success => successChild ??
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Icon(Icons.check, size: 18),
-                    const SizedBox(width: 8),
-                    Text(messages.success),
-                  ],
-                ),
-            SteadyActionStatus.error => errorChild ??
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Icon(Icons.refresh, size: 18),
-                    const SizedBox(width: 8),
-                    Text(messages.retry),
-                  ],
-                ),
-          };
-          return Semantics(
-            liveRegion: true,
-            button: true,
-            child: FilledButton.icon(
-              style: style,
-              onPressed:
-                  state.isRunning && concurrency == SteadyActionConcurrency.drop
-                      ? null
-                      : () => unawaited(run()),
-              icon: state.status == SteadyActionStatus.idle
-                  ? icon ?? const SizedBox.shrink()
-                  : const SizedBox.shrink(),
-              label: AnimatedSwitcher(
-                duration:
-                    MediaQuery.maybeOf(context)?.disableAnimations ?? false
-                        ? Duration.zero
-                        : const Duration(milliseconds: 160),
-                child:
-                    KeyedSubtree(key: ValueKey(state.status), child: content),
-              ),
-            ),
-          );
-        },
+        requestPolicy: requestPolicy,
+        observer: observer,
+        operationLabel: operationLabel,
+        builder: builder,
       );
+    }
+    return SteadyActionBuilder<T>(
+      action: action,
+      controller: controller,
+      concurrency: concurrency,
+      successVisibleDuration: SteadyTheme.of(context).successVisibleDuration,
+      requestPolicy: requestPolicy,
+      observer: observer,
+      operationLabel: operationLabel,
+      builder: builder,
+    );
+  }
 }
