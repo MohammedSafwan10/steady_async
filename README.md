@@ -1,10 +1,8 @@
 # steady_async
 
-Your API is not slow. Your loading UI is noisy.
-
-`steady_async` is a Flutter package family for predictable async UX: delayed
-loaders, retained refresh content, retries, timeouts, real cancellation,
-optimistic actions, source-safe pagination, and stale-result guards.
+`steady_async` provides Flutter states, controllers, and widgets for delayed
+loaders, retained refresh data, retries, timeouts, cancellation, optimistic
+actions, pagination, and stale-result handling.
 
 [Live showcase](https://steady-async.nexdark.com) ·
 [Core package](packages/steady_async) ·

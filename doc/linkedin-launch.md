@@ -4,20 +4,18 @@
 
 | Time | Screen | Caption |
 | --- | --- | --- |
-| 0–2s | Typical Flutter flashes a spinner on a fast response | Your API isn't slow. |
-| 2–5s | Refresh removes useful content | Your loading UI is noisy. |
-| 5–9s | `steady_async` keeps content and uses calm progress | One policy. Every async screen. |
+| 0–2s | A fast response briefly flashes a spinner | Fast request: no spinner needed |
+| 2–5s | Refresh replaces the current content | Refresh: keep current data visible |
+| 5–9s | `steady_async` delays the loader and retains data | Loading and refresh behavior in one controller |
 | 9–12s | Package name, pub.dev command, demo URL | `flutter pub add steady_async` |
 
 ## Post copy
 
-Your API isn't slow. Your loading UI is noisy.
-
-I built `steady_async` to stop flashing loaders, duplicate taps, disappearing
-refresh content, and stale async results in Flutter. It works independently or
-with Riverpod and BLoC, and includes actions, pagination, accessibility, and
-nine locales.
+I kept rewriting loader timing, refresh state, retries, duplicate-submit guards,
+and pagination handling in Flutter projects, so I moved that code into
+`steady_async`. The core package works with plain Flutter, and Riverpod and BLoC
+adapters are separate packages.
 
 Try the interactive before/after demo: https://steady-async.nexdark.com
 
-What async UX bug has annoyed you most in Flutter?
+Feedback and reproducible edge cases are welcome on GitHub.

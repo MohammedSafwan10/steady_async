@@ -5,7 +5,7 @@
     "display": "standalone",
     "background_color": "#F8F7FF",
     "theme_color": "#5B5BD6",
-    "description": "Production-ready async UX for Flutter.",
+    "description": "Flutter examples for loading, refresh, actions, and pagination.",
     "prefer_related_applications": false,
     "icons": [
         {

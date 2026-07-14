@@ -17,7 +17,7 @@ typedef SteadyErrorBuilder<T> = Widget Function(
   VoidCallback? retry,
 );
 
-/// Renders explicit async state while applying perception-aware timing.
+/// Renders explicit async state with delayed and minimum-duration loaders.
 class SteadyStateView<T> extends StatefulWidget {
   const SteadyStateView({
     required this.state,

@@ -148,7 +148,7 @@ class _ProductionLabState extends State<_ProductionLab> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const Text(
-            'PRODUCTION LAB',
+            'REQUEST TEST BENCH',
             style: TextStyle(
               color: _indigo,
               fontWeight: FontWeight.w900,
@@ -157,7 +157,7 @@ class _ProductionLabState extends State<_ProductionLab> {
           ),
           const SizedBox(height: 12),
           const Text(
-            'The awkward cases, running for real.',
+            'Run request and pagination edge cases.',
             style: TextStyle(
               color: _ink,
               fontSize: 40,
@@ -168,7 +168,7 @@ class _ProductionLabState extends State<_ProductionLab> {
           ),
           const SizedBox(height: 12),
           const Text(
-            'Trigger retries, a real timeout cancellation, cached hydration, source changes, and optimistic rollback.',
+            'Try retries, timeout cancellation, cached data, source changes, and optimistic rollback.',
             style: TextStyle(color: _muted, fontSize: 17),
           ),
           const SizedBox(height: 28),
@@ -247,7 +247,7 @@ class _ProductionLabState extends State<_ProductionLab> {
         ),
         const SizedBox(height: 10),
         Text(
-          'Real cancellations: $_cancelCount',
+          'Cancellation callbacks: $_cancelCount',
           style: const TextStyle(color: _muted),
         ),
       ],

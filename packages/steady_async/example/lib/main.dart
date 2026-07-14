@@ -10,7 +10,7 @@ class ExampleApp extends StatelessWidget {
 
   Future<List<String>> _loadItems() async {
     await Future<void>.delayed(const Duration(milliseconds: 700));
-    return const ['Calm loading', 'Safe retry', 'Previous data on refresh'];
+    return const ['Delayed loader', 'Retry', 'Data retained during refresh'];
   }
 
   @override

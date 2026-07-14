@@ -1,4 +1,4 @@
-/// Perception-aware async UX for Flutter.
+/// Flutter states, controllers, and widgets for asynchronous operations.
 library;
 
 export 'src/action.dart';
