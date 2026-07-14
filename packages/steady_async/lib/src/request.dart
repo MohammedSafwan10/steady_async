@@ -266,10 +266,6 @@ class SteadyCancellableOperation<T> {
     required VoidCallback cancel,
   }) : _cancel = cancel;
 
-  /// Wraps an ordinary Future with a no-op cancellation callback.
-  factory SteadyCancellableOperation.fromFuture(Future<T> future) =>
-      SteadyCancellableOperation(future: future, cancel: _noop);
-
   /// Result produced if the operation finishes before cancellation.
   final Future<T> future;
   final VoidCallback _cancel;
@@ -285,8 +281,6 @@ class SteadyCancellableOperation<T> {
     _cancel();
   }
 }
-
-void _noop() {}
 
 /// Kinds of telemetry emitted by steady controllers.
 enum SteadyLifecycleEventKind {

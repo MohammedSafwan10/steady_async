@@ -125,9 +125,9 @@ void main() {
     await tester.pump();
     await tester.pump();
 
-    expect(find.text('Pay again'), findsOneWidget);
+    expect(find.text('Payment failed'), findsOneWidget);
     final actionButton = find.ancestor(
-      of: find.text('Pay again'),
+      of: find.text('Payment failed'),
       matching: find.byWidgetPredicate((widget) => widget is ButtonStyleButton),
     );
     expect(

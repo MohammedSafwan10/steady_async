@@ -36,11 +36,17 @@ class SteadyActionState<T> {
           lastAttemptAt: lastAttemptAt,
           attempt: attempt,
         );
-  const SteadyActionState.success(T value, {DateTime? completedAt})
-      : this._(
+  const SteadyActionState.success(
+    T value, {
+    DateTime? completedAt,
+    DateTime? lastAttemptAt,
+    int attempt = 1,
+  }) : this._(
           status: SteadyActionStatus.success,
           value: value,
           completedAt: completedAt,
+          lastAttemptAt: lastAttemptAt,
+          attempt: attempt,
         );
   const SteadyActionState.error(
     Object error, [
@@ -152,7 +158,9 @@ class SteadyActionController<T> extends ChangeNotifier
   int _generation = 0;
   int _operationId = 0;
   bool _disposed = false;
-  final Map<SteadyRequestRunner<T>, bool> _activeRunners = {};
+  bool _transitioning = false;
+  bool _invalidating = false;
+  final Map<SteadyRequestRunner<T>, _RunningAction<T>> _activeRunners = {};
   final Set<_QueuedAction<T>> _queuedActions = {};
 
   /// The latest public action state.
@@ -180,19 +188,15 @@ class SteadyActionController<T> extends ChangeNotifier
     if (!mutation.isPending) {
       throw StateError('runOptimistic requires a pending optimistic handle.');
     }
-    final transactionId = ++_operationId;
-    _emitOptimistic(
-      SteadyLifecycleEventKind.optimisticApplied,
-      transactionId,
-    );
-    return _run(mutation, transactionId);
+    return _run(mutation, ++_operationId);
   }
 
   Future<T?> _run(
     SteadyOptimisticHandle? mutation,
     int? transactionId,
   ) {
-    if (_disposed) {
+    if (_disposed || _transitioning) {
+      _activateMutation(mutation, transactionId);
       if (mutation?.rollback() ?? false) {
         _emitOptimistic(
           SteadyLifecycleEventKind.optimisticRolledBack,
@@ -202,6 +206,7 @@ class SteadyActionController<T> extends ChangeNotifier
       return Future<T?>.value();
     }
     if (concurrency == SteadyActionConcurrency.drop && _value.isRunning) {
+      _activateMutation(mutation, transactionId);
       if (mutation?.rollback() ?? false) {
         _emitOptimistic(
           SteadyLifecycleEventKind.optimisticRolledBack,
@@ -211,6 +216,9 @@ class SteadyActionController<T> extends ChangeNotifier
       return Future<T?>.value();
     }
     if (concurrency == SteadyActionConcurrency.sequential) {
+      if (!_activateMutation(mutation, transactionId)) {
+        return Future<T?>.value();
+      }
       final queued = _QueuedAction<T>(mutation, transactionId);
       _queuedActions.add(queued);
       _queue = _queue.then((_) async {
@@ -225,9 +233,30 @@ class SteadyActionController<T> extends ChangeNotifier
       return queued.future;
     }
     if (concurrency == SteadyActionConcurrency.latestWins) {
-      _stopActiveRunners();
+      _transitioning = true;
+      try {
+        _stopActiveRunners(rollbackOptimistic: true);
+      } finally {
+        _transitioning = false;
+      }
+    }
+    if (!_activateMutation(mutation, transactionId)) {
+      return Future<T?>.value();
     }
     return _execute(mutation, transactionId);
+  }
+
+  bool _activateMutation(
+    SteadyOptimisticHandle? mutation,
+    int? transactionId,
+  ) {
+    if (mutation == null) return true;
+    if (!mutation.isApplied && !mutation.activate()) return false;
+    _emitOptimistic(
+      SteadyLifecycleEventKind.optimisticApplied,
+      transactionId!,
+    );
+    return true;
   }
 
   Future<T?> _execute(
@@ -250,14 +279,21 @@ class SteadyActionController<T> extends ChangeNotifier
     _setValue(
       SteadyActionState<T>.running(lastAttemptAt: _now()),
     );
+    if (!_accepts(generation)) {
+      if (mutation?.rollback() ?? false) {
+        _emitOptimistic(
+          SteadyLifecycleEventKind.optimisticRolledBack,
+          transactionId!,
+        );
+      }
+      return null;
+    }
     final runner = SteadyRequestRunner<T>(
       operationId: ++_operationId,
       controllerType: 'action',
       operation: SteadyOperationKind.action,
       factory: cancellableAction ??
-          () => SteadyCancellableOperation<T>.fromFuture(
-                Future<T>.sync(action!),
-              ),
+          () => steadyOperationFromFuture<T>(Future<T>.sync(action!)),
       policy: requestPolicy,
       clock: _clock,
       observer: observer,
@@ -273,7 +309,11 @@ class SteadyActionController<T> extends ChangeNotifier
         }
       },
     );
-    _activeRunners[runner] = cancellableAction != null;
+    _activeRunners[runner] = _RunningAction<T>(
+      cancellable: cancellableAction != null,
+      mutation: mutation,
+      transactionId: transactionId,
+    );
     final execution = await runner.run();
     _activeRunners.remove(runner);
     switch (execution) {
@@ -286,7 +326,12 @@ class SteadyActionController<T> extends ChangeNotifier
         }
         if (!_accepts(generation)) return value;
         _setValue(
-          SteadyActionState<T>.success(value, completedAt: completedAt),
+          SteadyActionState<T>.success(
+            value,
+            completedAt: completedAt,
+            lastAttemptAt: _value.lastAttemptAt,
+            attempt: runner.attempt,
+          ),
         );
         if (successVisibleDuration > Duration.zero) {
           _successTimer = Timer(successVisibleDuration, () {
@@ -323,20 +368,35 @@ class SteadyActionController<T> extends ChangeNotifier
 
   /// Returns to idle and invalidates results from active calls.
   void reset() {
-    if (_disposed) return;
-    _successTimer?.cancel();
-    _successTimer = null;
-    _generation++;
-    _stopActiveRunners();
-    _cancelQueuedActions();
-    _setValue(SteadyActionState<T>.idle());
+    if (_disposed || _invalidating) return;
+    final wasTransitioning = _transitioning;
+    _invalidating = true;
+    _transitioning = true;
+    try {
+      _successTimer?.cancel();
+      _successTimer = null;
+      _generation++;
+      _stopActiveRunners();
+      _cancelQueuedActions();
+      _setValue(SteadyActionState<T>.idle());
+    } finally {
+      _transitioning = wasTransitioning;
+      _invalidating = false;
+    }
   }
 
   bool _accepts(int generation) => !_disposed && generation == _generation;
 
-  void _stopActiveRunners() {
+  void _stopActiveRunners({bool rollbackOptimistic = false}) {
     for (final entry in _activeRunners.entries.toList()) {
-      if (entry.value) {
+      final running = entry.value;
+      if (rollbackOptimistic && (running.mutation?.rollback() ?? false)) {
+        _emitOptimistic(
+          SteadyLifecycleEventKind.optimisticRolledBack,
+          running.transactionId!,
+        );
+      }
+      if (running.cancellable) {
         entry.key.cancel();
       } else {
         entry.key.stopAfterCurrent();
@@ -345,7 +405,7 @@ class SteadyActionController<T> extends ChangeNotifier
   }
 
   void _cancelQueuedActions() {
-    for (final queued in _queuedActions.toList()) {
+    for (final queued in _queuedActions.toList().reversed) {
       if (queued.cancel()) {
         final transactionId = queued.transactionId;
         if (queued.mutation?.rollback() ?? false) {
@@ -386,6 +446,7 @@ class SteadyActionController<T> extends ChangeNotifier
 
   @override
   void dispose() {
+    if (_disposed) return;
     _successTimer?.cancel();
     _disposed = true;
     _generation++;
@@ -393,6 +454,18 @@ class SteadyActionController<T> extends ChangeNotifier
     _cancelQueuedActions();
     super.dispose();
   }
+}
+
+class _RunningAction<T> {
+  const _RunningAction({
+    required this.cancellable,
+    required this.mutation,
+    required this.transactionId,
+  });
+
+  final bool cancellable;
+  final SteadyOptimisticHandle? mutation;
+  final int? transactionId;
 }
 
 class _QueuedAction<T> {
@@ -658,14 +731,16 @@ class SteadyButton<T> extends StatelessWidget {
               ],
             ),
         SteadyActionStatus.error => errorChild ??
-            Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(Icons.refresh, size: 18),
-                const SizedBox(width: 8),
-                Text(presentation?.retryLabel ?? messages.retry),
-              ],
-            ),
+            (presentation?.showRetry ?? true
+                ? Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.refresh, size: 18),
+                      const SizedBox(width: 8),
+                      Text(presentation?.retryLabel ?? messages.retry),
+                    ],
+                  )
+                : Text(presentation?.message ?? messages.error)),
       };
       return Semantics(
         liveRegion: true,

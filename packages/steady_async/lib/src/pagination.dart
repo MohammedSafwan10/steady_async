@@ -228,6 +228,8 @@ class SteadyPagedController<T, K> extends ChangeNotifier
   int _sourceRevision = 0;
   int _operationId = 0;
   bool _disposed = false;
+  bool _transitioning = false;
+  bool _invalidating = false;
   bool _seedNeedsRefresh = false;
   SteadyRequestRunner<SteadyPage<T, K>>? _activeRunner;
 
@@ -250,7 +252,7 @@ class SteadyPagedController<T, K> extends ChangeNotifier
 
   /// Loads the first page once while the controller is idle.
   Future<void> loadInitial() async {
-    if (_disposed) return;
+    if (_disposed || _transitioning) return;
     if (_seedNeedsRefresh) {
       _seedNeedsRefresh = false;
       await _replace(_firstPageKey, refreshing: true);
@@ -262,30 +264,44 @@ class SteadyPagedController<T, K> extends ChangeNotifier
 
   /// Replaces existing pages starting at [firstPageKey].
   Future<void> refresh() {
-    if (_disposed) return Future<void>.value();
+    if (_disposed || _transitioning) return Future<void>.value();
     return _replace(_firstPageKey, refreshing: true);
   }
 
   Future<void> _replace(K key, {required bool refreshing}) async {
-    if (_disposed) return;
-    _activeRunner?.cancel();
-    final generation = ++_generation;
-    _requestedPageKeys
-      ..clear()
-      ..add(key);
-    _setValue(
-      _value.copyWith(
-        status: refreshing && _value.items.isNotEmpty
-            ? SteadyPagedStatus.refreshing
-            : SteadyPagedStatus.initialLoading,
-        clearError: true,
-        lastAttemptAt: _now(),
-      ),
-    );
+    if (_disposed || _transitioning) return;
+    _transitioning = true;
+    late final int generation;
     final operation = refreshing
         ? SteadyOperationKind.refresh
         : SteadyOperationKind.initialLoad;
-    final execution = await _executePage(key, operation);
+    SteadyRequestRunner<SteadyPage<T, K>>? runner;
+    try {
+      final previousRunner = _activeRunner;
+      _activeRunner = null;
+      generation = ++_generation;
+      previousRunner?.cancel();
+      if (!_accepts(generation)) return;
+      _requestedPageKeys
+        ..clear()
+        ..add(key);
+      _setValue(
+        _value.copyWith(
+          status: refreshing && _value.items.isNotEmpty
+              ? SteadyPagedStatus.refreshing
+              : SteadyPagedStatus.initialLoading,
+          clearError: true,
+          lastAttemptAt: _now(),
+        ),
+      );
+      if (!_accepts(generation)) return;
+      runner = _createPageRunner(key, operation, generation);
+      _activeRunner = runner;
+    } finally {
+      _transitioning = false;
+    }
+    final execution = await runner.run();
+    if (identical(_activeRunner, runner)) _activeRunner = null;
     if (!_accepts(generation)) return;
     switch (execution) {
       case SteadyExecutionSuccess<SteadyPage<T, K>>(
@@ -314,19 +330,33 @@ class SteadyPagedController<T, K> extends ChangeNotifier
 
   /// Appends the page identified by the current next key.
   Future<void> loadMore() async {
-    if (_disposed) return;
+    if (_disposed || _transitioning) return;
     final key = _value.nextKey;
     if (_value.isBusy || key == null) return;
     final generation = _generation;
-    _requestedPageKeys.add(key);
-    _setValue(
-      _value.copyWith(
-        status: SteadyPagedStatus.loadingMore,
-        clearError: true,
-        lastAttemptAt: _now(),
-      ),
-    );
-    final execution = await _executePage(key, SteadyOperationKind.append);
+    _transitioning = true;
+    SteadyRequestRunner<SteadyPage<T, K>>? runner;
+    try {
+      _requestedPageKeys.add(key);
+      _setValue(
+        _value.copyWith(
+          status: SteadyPagedStatus.loadingMore,
+          clearError: true,
+          lastAttemptAt: _now(),
+        ),
+      );
+      if (!_accepts(generation)) return;
+      runner = _createPageRunner(
+        key,
+        SteadyOperationKind.append,
+        generation,
+      );
+      _activeRunner = runner;
+    } finally {
+      _transitioning = false;
+    }
+    final execution = await runner.run();
+    if (identical(_activeRunner, runner)) _activeRunner = null;
     if (!_accepts(generation)) return;
     switch (execution) {
       case SteadyExecutionSuccess<SteadyPage<T, K>>(
@@ -357,7 +387,11 @@ class SteadyPagedController<T, K> extends ChangeNotifier
   /// Repeats the failed initial, refresh, or append request.
   Future<void> retry() {
     if (_disposed) return Future<void>.value();
-    return _value.items.isEmpty || !_value.appendError ? refresh() : loadMore();
+    if (_value.appendError) return loadMore();
+    if (_value.failure?.operation == SteadyOperationKind.initialLoad) {
+      return _replace(_firstPageKey, refreshing: false);
+    }
+    return refresh();
   }
 
   SteadyPage<T, K> _validatePage(SteadyPage<T, K> page) {
@@ -368,33 +402,36 @@ class SteadyPagedController<T, K> extends ChangeNotifier
     return page;
   }
 
-  Future<SteadyExecution<SteadyPage<T, K>>> _executePage(
+  SteadyRequestRunner<SteadyPage<T, K>> _createPageRunner(
     K key,
     SteadyOperationKind operation,
-  ) async {
+    int generation,
+  ) {
+    final loadPage = _loadPage;
+    final cancellableLoadPage = _cancellableLoadPage;
     final runner = SteadyRequestRunner<SteadyPage<T, K>>(
       operationId: ++_operationId,
       controllerType: 'pagination',
       operation: operation,
-      factory: () => _pageOperation(key),
+      factory: () => _pageOperation(key, loadPage, cancellableLoadPage),
       policy: requestPolicy,
       clock: _clock,
       observer: observer,
       label: operationLabel,
       onAttempt: (_, startedAt) {
-        if (!_disposed && _value.isBusy) {
+        if (_accepts(generation) && _value.isBusy) {
           _setValue(_value.copyWith(lastAttemptAt: startedAt));
         }
       },
     );
-    _activeRunner = runner;
-    final execution = await runner.run();
-    if (identical(_activeRunner, runner)) _activeRunner = null;
-    return execution;
+    return runner;
   }
 
-  SteadyCancellableOperation<SteadyPage<T, K>> _pageOperation(K key) {
-    final cancellable = _cancellableLoadPage;
+  SteadyCancellableOperation<SteadyPage<T, K>> _pageOperation(
+    K key,
+    SteadyPageLoader<T, K>? loadPage,
+    SteadyCancellablePageLoader<T, K>? cancellable,
+  ) {
     if (cancellable != null) {
       final operation = cancellable(key);
       return SteadyCancellableOperation(
@@ -402,8 +439,8 @@ class SteadyPagedController<T, K> extends ChangeNotifier
         cancel: operation.cancel,
       );
     }
-    return SteadyCancellableOperation.fromFuture(
-      Future<SteadyPage<T, K>>.sync(() => _loadPage!(key)).then(_validatePage),
+    return steadyOperationFromFuture(
+      Future<SteadyPage<T, K>>.sync(() => loadPage!(key)).then(_validatePage),
     );
   }
 
@@ -442,31 +479,41 @@ class SteadyPagedController<T, K> extends ChangeNotifier
   /// When `itemKey` is configured, an existing item with the same key is
   /// removed first. The current next-page key is retained.
   bool insert(T item, {int index = 0}) {
-    if (_disposed) return false;
-    _prepareImmediateMutation();
-    final keyOf = itemKey;
-    if (keyOf != null) {
-      final key = keyOf(item);
-      _baseItems.removeWhere((current) => keyOf(current) == key);
+    if (_disposed || _transitioning) return false;
+    _transitioning = true;
+    try {
+      _prepareImmediateMutation();
+      final keyOf = itemKey;
+      if (keyOf != null) {
+        final key = keyOf(item);
+        _baseItems.removeWhere((current) => keyOf(current) == key);
+      }
+      _baseItems.insert(index.clamp(0, _baseItems.length), item);
+      _publishLocalMutation();
+      return true;
+    } finally {
+      _transitioning = false;
     }
-    _baseItems.insert(index.clamp(0, _baseItems.length), item);
-    _publishLocalMutation();
-    return true;
   }
 
   /// Replaces a local item selected by [key].
   ///
   /// Returns false when no item matches. This requires `itemKey`.
   bool updateByKey(Object? key, T Function(T current) update) {
-    if (_disposed) return false;
+    if (_disposed || _transitioning) return false;
     final keyOf = _requireItemKey('updateByKey');
     if (!_authoritativeItems().any((item) => keyOf(item) == key)) return false;
-    _prepareImmediateMutation();
-    final baseIndex = _baseItems.indexWhere((item) => keyOf(item) == key);
-    if (baseIndex < 0) return false;
-    _baseItems[baseIndex] = update(_baseItems[baseIndex]);
-    _publishLocalMutation();
-    return true;
+    _transitioning = true;
+    try {
+      _prepareImmediateMutation();
+      final baseIndex = _baseItems.indexWhere((item) => keyOf(item) == key);
+      if (baseIndex < 0) return false;
+      _baseItems[baseIndex] = update(_baseItems[baseIndex]);
+      _publishLocalMutation();
+      return true;
+    } finally {
+      _transitioning = false;
+    }
   }
 
   /// Removes every item matched by [predicate].
@@ -474,12 +521,17 @@ class SteadyPagedController<T, K> extends ChangeNotifier
   /// A successful removal invalidates active requests so an older completion
   /// cannot restore a locally removed item. The current next-page key is kept.
   bool removeWhere(bool Function(T item) predicate) {
-    if (_disposed) return false;
+    if (_disposed || _transitioning) return false;
     if (!_authoritativeItems().any(predicate)) return false;
-    _prepareImmediateMutation();
-    _baseItems = _baseItems.where((item) => !predicate(item)).toList();
-    _publishLocalMutation();
-    return true;
+    _transitioning = true;
+    try {
+      _prepareImmediateMutation();
+      _baseItems = _baseItems.where((item) => !predicate(item)).toList();
+      _publishLocalMutation();
+      return true;
+    } finally {
+      _transitioning = false;
+    }
   }
 
   /// Removes items whose application key equals [key].
@@ -515,6 +567,9 @@ class SteadyPagedController<T, K> extends ChangeNotifier
   /// }
   /// ```
   SteadyOptimisticHandle optimisticInsert(T item, {int index = 0}) {
+    if (_disposed || _transitioning) {
+      return SteadyOptimisticHandle.invalidated();
+    }
     final keyOf = _requireItemKey('optimisticInsert');
     return _addOptimistic(
       _PagedMutation.insert(
@@ -531,6 +586,9 @@ class SteadyPagedController<T, K> extends ChangeNotifier
     Object? key,
     T Function(T current) update,
   ) {
+    if (_disposed || _transitioning) {
+      return SteadyOptimisticHandle.invalidated();
+    }
     final keyOf = _requireItemKey('optimisticUpdateByKey');
     final current =
         _visibleItems().where((item) => keyOf(item) == key).firstOrNull;
@@ -548,6 +606,9 @@ class SteadyPagedController<T, K> extends ChangeNotifier
 
   /// Hides a keyed item immediately until the handle commits or rolls back.
   SteadyOptimisticHandle optimisticRemoveByKey(Object? key) {
+    if (_disposed || _transitioning) {
+      return SteadyOptimisticHandle.invalidated();
+    }
     final keyOf = _requireItemKey('optimisticRemoveByKey');
     if (!_visibleItems().any((item) => keyOf(item) == key)) {
       throw StateError('No item exists for optimistic key $key.');
@@ -616,9 +677,10 @@ class SteadyPagedController<T, K> extends ChangeNotifier
   }
 
   void _prepareImmediateMutation() {
-    _activeRunner?.cancel();
+    final runner = _activeRunner;
     _activeRunner = null;
     _generation++;
+    runner?.cancel();
     _invalidateOptimistic(preserveCommitted: true);
   }
 
@@ -665,9 +727,7 @@ class SteadyPagedController<T, K> extends ChangeNotifier
     bool loadImmediately = true,
     bool refreshSeededData = true,
   }) async {
-    if (_disposed) return;
-    _loadPage = loadPage;
-    _cancellableLoadPage = null;
+    if (_disposed || _transitioning) return;
     await _replaceSourceConfiguration(
       sourceKey: sourceKey,
       firstPageKey: firstPageKey,
@@ -675,6 +735,8 @@ class SteadyPagedController<T, K> extends ChangeNotifier
       transition: transition,
       loadImmediately: loadImmediately,
       refreshSeededData: refreshSeededData,
+      loadPage: loadPage,
+      cancellableLoadPage: null,
     );
   }
 
@@ -688,9 +750,7 @@ class SteadyPagedController<T, K> extends ChangeNotifier
     bool loadImmediately = true,
     bool refreshSeededData = true,
   }) async {
-    if (_disposed) return;
-    _cancellableLoadPage = loadPage;
-    _loadPage = null;
+    if (_disposed || _transitioning) return;
     await _replaceSourceConfiguration(
       sourceKey: sourceKey,
       firstPageKey: firstPageKey,
@@ -698,6 +758,8 @@ class SteadyPagedController<T, K> extends ChangeNotifier
       transition: transition,
       loadImmediately: loadImmediately,
       refreshSeededData: refreshSeededData,
+      loadPage: null,
+      cancellableLoadPage: loadPage,
     );
   }
 
@@ -708,33 +770,46 @@ class SteadyPagedController<T, K> extends ChangeNotifier
     required SteadySourceTransition transition,
     required bool loadImmediately,
     required bool refreshSeededData,
+    required SteadyPageLoader<T, K>? loadPage,
+    required SteadyCancellablePageLoader<T, K>? cancellableLoadPage,
   }) async {
-    _activeRunner?.cancel();
-    _activeRunner = null;
-    _generation++;
-    _requestedPageKeys.clear();
-    final retainBase =
-        seed == null && transition == SteadySourceTransition.retain;
-    _invalidateOptimistic(preserveCommitted: retainBase);
-    _seedNeedsRefresh = false;
-    if (_sourceKey != sourceKey) _sourceRevision++;
-    _sourceKey = sourceKey;
-    _firstPageKey = firstPageKey;
-    if (seed != null) {
-      _installSeed(seed, needsRefresh: refreshSeededData);
-    } else if (transition == SteadySourceTransition.retain) {
-      _value = SteadyPagedState<T, K>(
-        items: List<T>.unmodifiable(_deduplicate(_baseItems)),
-        status: SteadyPagedStatus.loaded,
-        lastUpdatedAt: _value.lastUpdatedAt,
-      );
-    } else {
-      _baseItems = [];
-      _value = SteadyPagedState<T, K>();
+    if (_disposed || _transitioning) return;
+    _transitioning = true;
+    try {
+      final runner = _activeRunner;
+      _activeRunner = null;
+      _generation++;
+      runner?.cancel();
+      if (_disposed) return;
+      _loadPage = loadPage;
+      _cancellableLoadPage = cancellableLoadPage;
+      _requestedPageKeys.clear();
+      final retainBase =
+          seed == null && transition == SteadySourceTransition.retain;
+      _invalidateOptimistic(preserveCommitted: retainBase);
+      _seedNeedsRefresh = false;
+      if (_sourceKey != sourceKey) _sourceRevision++;
+      _sourceKey = sourceKey;
+      _firstPageKey = firstPageKey;
+      if (seed != null) {
+        _installSeed(seed, needsRefresh: refreshSeededData);
+      } else if (transition == SteadySourceTransition.retain) {
+        _value = SteadyPagedState<T, K>(
+          items: List<T>.unmodifiable(_deduplicate(_baseItems)),
+          status: SteadyPagedStatus.loaded,
+          lastUpdatedAt: _value.lastUpdatedAt,
+        );
+      } else {
+        _baseItems = [];
+        _value = SteadyPagedState<T, K>();
+      }
+      _emitSourceReplaced();
+      if (_disposed) return;
+      notifyListeners();
+    } finally {
+      _transitioning = false;
     }
-    _emitSourceReplaced();
-    notifyListeners();
-    if (loadImmediately) {
+    if (loadImmediately && !_disposed) {
       _seedNeedsRefresh = false;
       await _replace(_firstPageKey, refreshing: _value.items.isNotEmpty);
     }
@@ -800,14 +875,24 @@ class SteadyPagedController<T, K> extends ChangeNotifier
 
   /// Clears all items and invalidates active requests.
   void reset() {
-    if (_disposed) return;
-    _activeRunner?.cancel();
-    _activeRunner = null;
-    _generation++;
-    _requestedPageKeys.clear();
-    _invalidateOptimistic();
-    _baseItems = [];
-    _setValue(SteadyPagedState<T, K>());
+    if (_disposed || _invalidating) return;
+    final wasTransitioning = _transitioning;
+    _invalidating = true;
+    _transitioning = true;
+    try {
+      final runner = _activeRunner;
+      _activeRunner = null;
+      _generation++;
+      runner?.cancel();
+      _requestedPageKeys.clear();
+      _invalidateOptimistic();
+      _seedNeedsRefresh = false;
+      _baseItems = [];
+      _setValue(SteadyPagedState<T, K>());
+    } finally {
+      _transitioning = wasTransitioning;
+      _invalidating = false;
+    }
   }
 
   bool _accepts(int generation) => !_disposed && generation == _generation;
@@ -820,11 +905,13 @@ class SteadyPagedController<T, K> extends ChangeNotifier
 
   @override
   void dispose() {
-    _activeRunner?.cancel();
-    _activeRunner = null;
-    _invalidateOptimistic();
+    if (_disposed) return;
     _disposed = true;
     _generation++;
+    final runner = _activeRunner;
+    _activeRunner = null;
+    runner?.cancel();
+    _invalidateOptimistic();
     super.dispose();
   }
 
@@ -1292,11 +1379,9 @@ class SteadyPagedSliverList<T, K> extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (controller.value.status == SteadyPagedStatus.idle) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        unawaited(controller.loadInitial());
-      });
-    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(controller.loadInitial());
+    });
     return AnimatedBuilder(
       animation: controller,
       builder: (context, _) {
@@ -1413,11 +1498,9 @@ class SteadyPagedSliverGrid<T, K> extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (controller.value.status == SteadyPagedStatus.idle) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        unawaited(controller.loadInitial());
-      });
-    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(controller.loadInitial());
+    });
     return AnimatedBuilder(
       animation: controller,
       builder: (context, _) {

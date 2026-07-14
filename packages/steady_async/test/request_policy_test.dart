@@ -406,24 +406,27 @@ void main() {
     controller.dispose();
   });
 
-  test('latest-wins resolves each optimistic handle from its own outcome',
+  test('latest-wins rolls back the old mutation before applying the new one',
       () async {
     final firstResult = Completer<int>();
     final secondResult = Completer<int>();
     var calls = 0;
-    var committed = 0;
+    var visible = 0;
     final controller = SteadyActionController<int>(
       () => calls++ == 0 ? firstResult.future : secondResult.future,
       concurrency: SteadyActionConcurrency.latestWins,
       successVisibleDuration: Duration.zero,
     );
-    SteadyOptimisticHandle mutation() => SteadyOptimisticHandle.apply(
-          apply: () {},
-          commit: () => committed++,
-          rollback: () => committed--,
-        );
-    final firstMutation = mutation();
-    final secondMutation = mutation();
+    SteadyOptimisticHandle mutation(int next) {
+      final previous = visible;
+      return SteadyOptimisticHandle.apply(
+        apply: () => visible = next,
+        rollback: () => visible = previous,
+      );
+    }
+
+    final firstMutation = mutation(1);
+    final secondMutation = mutation(2);
 
     final first = controller.runOptimistic(firstMutation);
     final second = controller.runOptimistic(secondMutation);
@@ -432,9 +435,9 @@ void main() {
     firstResult.complete(1);
     await first;
 
-    expect(firstMutation.status, SteadyOptimisticStatus.committed);
+    expect(firstMutation.status, SteadyOptimisticStatus.rolledBack);
     expect(secondMutation.status, SteadyOptimisticStatus.committed);
-    expect(committed, 2);
+    expect(visible, 2);
     expect(controller.value.value, 2);
     controller.dispose();
   });
