@@ -47,6 +47,8 @@ class SteadyAsyncController<T> extends ChangeNotifier
   int _generation = 0;
   int _operationId = 0;
   bool _disposed = false;
+  bool _transitioning = false;
+  bool _invalidating = false;
   SteadyLoadingPhase _lastPhase = SteadyLoadingPhase.initial;
   SteadyRequestRunner<T>? _activeRunner;
 
@@ -68,56 +70,83 @@ class SteadyAsyncController<T> extends ChangeNotifier
   Future<void> load({
     SteadyLoadingPhase phase = SteadyLoadingPhase.initial,
   }) async {
-    if (_disposed) return;
-    _activeRunner?.cancel();
-    _lastPhase = phase;
-    final generation = ++_generation;
-    final previous = _value.valueOrNull;
-    final hasPrevious = _value.hasValue;
-    final previousUpdatedAt = _value.lastUpdatedAt;
-    _setValue(
-      SteadyAsyncState<T>.loading(
-        previousValue: previous,
-        hasPreviousValue: hasPrevious,
-        phase: phase,
-        previousUpdatedAt: previousUpdatedAt,
-        lastAttemptAt: _now(),
-      ),
-    );
+    if (_disposed || _transitioning) return;
+    _transitioning = true;
+    late final int generation;
+    late final T? previous;
+    late final bool hasPrevious;
+    late final DateTime? previousUpdatedAt;
+    SteadyRequestRunner<T>? runner;
+    try {
+      final previousRunner = _activeRunner;
+      _activeRunner = null;
+      generation = ++_generation;
+      previousRunner?.cancel();
+      if (!_accepts(generation)) return;
 
-    final runner = SteadyRequestRunner<T>(
-      operationId: ++_operationId,
-      controllerType: 'async',
-      operation: _operationFor(phase),
-      factory: _operationFactory,
-      policy: requestPolicy,
-      clock: _clock,
-      observer: observer,
-      label: operationLabel,
-      onAttempt: (attempt, startedAt) {
-        if (!_accepts(generation)) return;
-        final current = _value;
-        if (current is! SteadyLoading<T>) return;
-        _setValue(
-          SteadyAsyncState<T>.loading(
-            previousValue: current.previousValue,
-            hasPreviousValue: current.hasPreviousValue,
-            phase: current.phase,
-            progress: current.progress,
-            previousUpdatedAt: current.previousUpdatedAt,
-            lastAttemptAt: startedAt,
-            attempt: attempt,
-          ),
-        );
-      },
-    );
-    _activeRunner = runner;
+      _lastPhase = phase;
+      previous = _value.valueOrNull;
+      hasPrevious = _value.hasValue;
+      previousUpdatedAt = _value.lastUpdatedAt;
+      final cancellableLoader = _cancellableLoader;
+      final loader = _loader;
+      final operationFactory = cancellableLoader ??
+          () => steadyOperationFromFuture<T>(Future<T>.sync(loader!));
+      _setValue(
+        SteadyAsyncState<T>.loading(
+          previousValue: previous,
+          hasPreviousValue: hasPrevious,
+          phase: phase,
+          previousUpdatedAt: previousUpdatedAt,
+          lastAttemptAt: _now(),
+        ),
+      );
+      if (!_accepts(generation)) return;
+
+      runner = SteadyRequestRunner<T>(
+        operationId: ++_operationId,
+        controllerType: 'async',
+        operation: _operationFor(phase),
+        factory: operationFactory,
+        policy: requestPolicy,
+        clock: _clock,
+        observer: observer,
+        label: operationLabel,
+        onAttempt: (attempt, startedAt) {
+          if (!_accepts(generation)) return;
+          final current = _value;
+          if (current is! SteadyLoading<T>) return;
+          _setValue(
+            SteadyAsyncState<T>.loading(
+              previousValue: current.previousValue,
+              hasPreviousValue: current.hasPreviousValue,
+              phase: current.phase,
+              progress: current.progress,
+              previousUpdatedAt: current.previousUpdatedAt,
+              lastAttemptAt: startedAt,
+              attempt: attempt,
+            ),
+          );
+        },
+      );
+      _activeRunner = runner;
+    } finally {
+      _transitioning = false;
+    }
     final execution = await runner.run();
     if (identical(_activeRunner, runner)) _activeRunner = null;
     if (!_accepts(generation)) return;
     switch (execution) {
       case SteadyExecutionSuccess<T>(:final value, :final completedAt):
-        _setValue(SteadyAsyncState<T>.data(value, updatedAt: completedAt));
+        _setValue(
+          SteadyAsyncState<T>.data(
+            value,
+            updatedAt: completedAt,
+            lastAttemptAt: _value.lastAttemptAt,
+            attempt: runner.attempt,
+            operation: _operationFor(phase),
+          ),
+        );
       case SteadyExecutionFailure<T>(:final failure):
         _setValue(
           SteadyAsyncState<T>.error(
@@ -145,33 +174,42 @@ class SteadyAsyncController<T> extends ChangeNotifier
   /// to idle. This prevents an ignored completion from leaving the public state
   /// permanently stuck in loading.
   void cancel({bool reset = false}) {
-    if (_disposed) return;
-    _activeRunner?.cancel();
-    _activeRunner = null;
-    _generation++;
-    if (reset) {
-      _setValue(SteadyAsyncState<T>.idle());
-      return;
-    }
-    final current = _value;
-    if (current is SteadyLoading<T>) {
-      _setValue(
-        current.hasPreviousValue
-            ? SteadyAsyncState<T>.data(
-                current.previousValue as T,
-                updatedAt: current.previousUpdatedAt,
-              )
-            : SteadyAsyncState<T>.idle(),
-      );
+    if (_disposed || _invalidating) return;
+    final wasTransitioning = _transitioning;
+    _invalidating = true;
+    _transitioning = true;
+    try {
+      final runner = _activeRunner;
+      _activeRunner = null;
+      _generation++;
+      runner?.cancel();
+      if (_disposed) return;
+      if (reset) {
+        _setValue(SteadyAsyncState<T>.idle());
+        return;
+      }
+      final current = _value;
+      if (current is SteadyLoading<T>) {
+        _setValue(
+          current.hasPreviousValue
+              ? SteadyAsyncState<T>.data(
+                  current.previousValue as T,
+                  updatedAt: current.previousUpdatedAt,
+                  lastAttemptAt: current.lastAttemptAt,
+                  attempt: current.attempt,
+                  operation: _operationFor(current.phase),
+                )
+              : SteadyAsyncState<T>.idle(),
+        );
+      }
+    } finally {
+      _transitioning = wasTransitioning;
+      _invalidating = false;
     }
   }
 
   void reset() {
-    if (_disposed) return;
-    _activeRunner?.cancel();
-    _activeRunner = null;
-    _generation++;
-    _setValue(SteadyAsyncState<T>.idle());
+    cancel(reset: true);
   }
 
   void setProgress(double progress) {
@@ -187,14 +225,6 @@ class SteadyAsyncController<T> extends ChangeNotifier
         lastAttemptAt: current.lastAttemptAt,
         attempt: current.attempt,
       ),
-    );
-  }
-
-  SteadyCancellableOperation<T> _operationFactory() {
-    final cancellable = _cancellableLoader;
-    if (cancellable != null) return cancellable();
-    return SteadyCancellableOperation<T>.fromFuture(
-      Future<T>.sync(_loader!),
     );
   }
 
@@ -217,10 +247,12 @@ class SteadyAsyncController<T> extends ChangeNotifier
 
   @override
   void dispose() {
-    _activeRunner?.cancel();
-    _activeRunner = null;
+    if (_disposed) return;
     _disposed = true;
     _generation++;
+    final runner = _activeRunner;
+    _activeRunner = null;
+    runner?.cancel();
     super.dispose();
   }
 }

@@ -19,8 +19,13 @@ sealed class SteadyAsyncState<T> {
     int attempt,
   }) = SteadyLoading<T>;
 
-  const factory SteadyAsyncState.data(T value, {DateTime? updatedAt}) =
-      SteadyData<T>;
+  const factory SteadyAsyncState.data(
+    T value, {
+    DateTime? updatedAt,
+    DateTime? lastAttemptAt,
+    int attempt,
+    SteadyOperationKind? operation,
+  }) = SteadyData<T>;
 
   const factory SteadyAsyncState.error(
     Object error, {
@@ -54,6 +59,31 @@ sealed class SteadyAsyncState<T> {
         SteadyData<T>(:final updatedAt) => updatedAt,
         SteadyLoading<T>(:final previousUpdatedAt) => previousUpdatedAt,
         SteadyError<T>(:final previousUpdatedAt) => previousUpdatedAt,
+        _ => null,
+      };
+
+  DateTime? get lastAttemptAt => switch (this) {
+        SteadyData<T>(:final lastAttemptAt) => lastAttemptAt,
+        SteadyLoading<T>(:final lastAttemptAt) => lastAttemptAt,
+        SteadyError<T>(:final lastAttemptAt) => lastAttemptAt,
+        _ => null,
+      };
+
+  int get attempt => switch (this) {
+        SteadyData<T>(:final attempt) => attempt,
+        SteadyLoading<T>(:final attempt) => attempt,
+        SteadyError<T>(failure: final failure) => failure?.attempt ?? 0,
+        _ => 0,
+      };
+
+  SteadyOperationKind? get operationOrigin => switch (this) {
+        SteadyData<T>(:final operation) => operation,
+        SteadyLoading<T>(:final phase) => switch (phase) {
+            SteadyLoadingPhase.initial => SteadyOperationKind.initialLoad,
+            SteadyLoadingPhase.refresh => SteadyOperationKind.refresh,
+            SteadyLoadingPhase.reload => SteadyOperationKind.reload,
+          },
+        SteadyError<T>(failure: final failure) => failure?.operation,
         _ => null,
       };
 
@@ -106,7 +136,9 @@ final class SteadyLoading<T> extends SteadyAsyncState<T> {
   final SteadyLoadingPhase phase;
   final double? progress;
   final DateTime? previousUpdatedAt;
+  @override
   final DateTime? lastAttemptAt;
+  @override
   final int attempt;
 
   @override
@@ -127,19 +159,34 @@ final class SteadyLoading<T> extends SteadyAsyncState<T> {
 
 @immutable
 final class SteadyData<T> extends SteadyAsyncState<T> {
-  const SteadyData(this.value, {this.updatedAt});
+  const SteadyData(
+    this.value, {
+    this.updatedAt,
+    this.lastAttemptAt,
+    this.attempt = 1,
+    this.operation,
+  });
 
   final T value;
   final DateTime? updatedAt;
+  @override
+  final DateTime? lastAttemptAt;
+  @override
+  final int attempt;
+  final SteadyOperationKind? operation;
 
   @override
   bool operator ==(Object other) =>
       other is SteadyData<T> &&
       other.value == value &&
-      other.updatedAt == updatedAt;
+      other.updatedAt == updatedAt &&
+      other.lastAttemptAt == lastAttemptAt &&
+      other.attempt == attempt &&
+      other.operation == operation;
 
   @override
-  int get hashCode => Object.hash(SteadyData, value, updatedAt);
+  int get hashCode => Object.hash(
+      SteadyData, value, updatedAt, lastAttemptAt, attempt, operation);
 }
 
 @immutable
@@ -160,6 +207,7 @@ final class SteadyError<T> extends SteadyAsyncState<T> {
   final bool hasPreviousValue;
   final SteadyFailure? failure;
   final DateTime? previousUpdatedAt;
+  @override
   final DateTime? lastAttemptAt;
 
   @override

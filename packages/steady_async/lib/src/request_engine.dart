@@ -38,7 +38,8 @@ class SteadyRequestRunner<T> {
     this.observer,
     this.label,
     this.onAttempt,
-  }) : _factory = factory;
+  })  : _factory = factory,
+        _startedAt = clock().toUtc();
 
   final int operationId;
   final String controllerType;
@@ -58,7 +59,7 @@ class SteadyRequestRunner<T> {
   bool _stopAfterCurrent = false;
   bool _cancelEventSent = false;
   int _attempt = 0;
-  late final DateTime _startedAt = _now();
+  final DateTime _startedAt;
 
   int get attempt => _attempt;
   bool get isCancelled => _cancelled;
@@ -66,8 +67,12 @@ class SteadyRequestRunner<T> {
   Future<SteadyExecution<T>> run() async {
     while (!_cancelled) {
       _attempt++;
-      onAttempt?.call(_attempt, _now());
       _emit(SteadyLifecycleEventKind.started);
+      onAttempt?.call(_attempt, _now());
+      if (_cancelled || _stopAfterCurrent) {
+        _emitCancelledOnce();
+        return SteadyExecutionCancelled<T>();
+      }
       final outcome = await _runAttempt();
       if (outcome is _AttemptCancelled<T>) {
         return SteadyExecutionCancelled<T>();
@@ -213,6 +218,7 @@ class SteadyRequestRunner<T> {
   void stopAfterCurrent() {
     if (_cancelled || _stopAfterCurrent) return;
     _stopAfterCurrent = true;
+    _guard?.obsolete = true;
     if (!_stopRetrySignal.isCompleted) _stopRetrySignal.complete();
   }
 
@@ -247,24 +253,28 @@ class SteadyRequestRunner<T> {
   void _emit(
     SteadyLifecycleEventKind kind, {
     SteadyFailure? failure,
-  }) =>
-      notifySteadyObserver(
-        observer,
-        SteadyLifecycleEvent(
-          kind: kind,
-          operationId: operationId,
-          controllerType: controllerType,
-          operation: operation,
-          attempt: _attempt,
-          timestamp: _now(),
-          label: label,
-          elapsed: _now().difference(_startedAt),
-          failure: failure == null
-              ? null
-              : SteadyObservedFailure.fromFailure(failure),
-        ),
-      );
+  }) {
+    final timestamp = _now();
+    notifySteadyObserver(
+      observer,
+      SteadyLifecycleEvent(
+        kind: kind,
+        operationId: operationId,
+        controllerType: controllerType,
+        operation: operation,
+        attempt: _attempt,
+        timestamp: timestamp,
+        label: label,
+        elapsed: timestamp.difference(_startedAt),
+        failure:
+            failure == null ? null : SteadyObservedFailure.fromFailure(failure),
+      ),
+    );
+  }
 }
+
+SteadyCancellableOperation<T> steadyOperationFromFuture<T>(Future<T> future) =>
+    SteadyCancellableOperation<T>(future: future, cancel: () {});
 
 class _AttemptGuard {
   bool obsolete = false;
