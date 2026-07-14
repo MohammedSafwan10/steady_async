@@ -1,12 +1,12 @@
 # Release runbook
 
-Version 0.2.1 is a core patch release. Compatible adapter versions remain
+Version 0.2.2 is a core patch release. Compatible adapter versions remain
 unchanged because their public APIs and constraints already support it.
 
 1. Run `tool/verify.ps1` and resolve every warning.
 2. Confirm CI passes on minimum, latest, Windows, and macOS jobs.
 3. Run `dart pub publish --dry-run` inside `packages/steady_async`.
-4. Publish or tag `steady_async 0.2.1`.
+4. Publish or tag `steady_async 0.2.2`.
 5. Do not republish the unchanged adapter versions.
 6. GitHub trusted publishing uses repository
    `MohammedSafwan10/steady_async` and these tag patterns:

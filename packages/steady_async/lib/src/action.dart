@@ -217,8 +217,11 @@ class _SteadyActionBuilderState<T> extends State<SteadyActionBuilder<T>> {
   @override
   void didUpdateWidget(covariant SteadyActionBuilder<T> oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.controller != widget.controller ||
-        oldWidget.concurrency != widget.concurrency) {
+    final controllerChanged = oldWidget.controller != widget.controller;
+    final ownedConfigurationChanged = _ownsController &&
+        (oldWidget.concurrency != widget.concurrency ||
+            oldWidget.successVisibleDuration != widget.successVisibleDuration);
+    if (controllerChanged || ownedConfigurationChanged) {
       if (_ownsController) _controller.dispose();
       _attach();
     } else {

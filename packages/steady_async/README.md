@@ -15,7 +15,7 @@ policy while remaining independent of Provider, Riverpod, BLoC, and GetX.
 
 ```yaml
 dependencies:
-  steady_async: ^0.2.1
+  steady_async: ^0.2.2
 ```
 
 Flutter 3.22+ and Dart 3.4+ are supported.

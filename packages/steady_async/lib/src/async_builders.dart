@@ -175,23 +175,29 @@ class _SteadyStreamBuilderState<T> extends State<SteadyStreamBuilder<T>> {
         onError: (Object error, StackTrace stackTrace) {
           if (mounted && generation == _generation) {
             setState(() {
+              final latestValue = _state.valueOrNull;
+              final hasLatestValue = _state.hasValue;
               _state = SteadyAsyncState<T>.error(
                 error,
                 stackTrace: stackTrace,
-                previousValue: previous,
-                hasPreviousValue: hasPrevious,
+                previousValue: latestValue,
+                hasPreviousValue: hasLatestValue,
               );
             });
           }
         },
       );
     } catch (error, stackTrace) {
-      _state = SteadyAsyncState<T>.error(
-        error,
-        stackTrace: stackTrace,
-        previousValue: previous,
-        hasPreviousValue: hasPrevious,
-      );
+      if (mounted && generation == _generation) {
+        setState(() {
+          _state = SteadyAsyncState<T>.error(
+            error,
+            stackTrace: stackTrace,
+            previousValue: previous,
+            hasPreviousValue: hasPrevious,
+          );
+        });
+      }
     }
   }
 

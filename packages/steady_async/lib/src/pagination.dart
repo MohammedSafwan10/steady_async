@@ -95,7 +95,7 @@ class SteadyPagedState<T, K> {
     Object? error,
     bool clearError = false,
     StackTrace? stackTrace,
-    bool appendError = false,
+    bool? appendError,
   }) =>
       SteadyPagedState<T, K>(
         items: items ?? this.items,
@@ -103,7 +103,7 @@ class SteadyPagedState<T, K> {
         nextKey: clearNextKey ? null : nextKey ?? this.nextKey,
         error: clearError ? null : error ?? this.error,
         stackTrace: clearError ? null : stackTrace ?? this.stackTrace,
-        appendError: appendError,
+        appendError: clearError ? false : appendError ?? this.appendError,
       );
 }
 
@@ -605,7 +605,8 @@ class _SteadyPagedGridViewState<T, K> extends State<SteadyPagedGridView<T, K>> {
         builder: (context, _) {
           final state = widget.controller.value;
           _scheduleLoadIfUnderfilled();
-          if (state.items.isEmpty && state.isBusy) {
+          if (state.items.isEmpty &&
+              state.status == SteadyPagedStatus.initialLoading) {
             return widget.loadingBuilder?.call(context, state) ??
                 const SteadyDefaultLoadingView();
           }
@@ -715,7 +716,8 @@ class SteadyPagedSliverList<T, K> extends StatelessWidget {
       animation: controller,
       builder: (context, _) {
         final state = controller.value;
-        if (state.items.isEmpty && state.isBusy) {
+        if (state.items.isEmpty &&
+            state.status == SteadyPagedStatus.initialLoading) {
           return SliverFillRemaining(
             hasScrollBody: false,
             child: loadingBuilder?.call(context, state) ??

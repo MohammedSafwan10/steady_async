@@ -1,3 +1,16 @@
+## 0.2.2
+
+- Made request cancellation leave loading by restoring retained data or idle.
+- Preserved the latest stream value when a later stream event fails.
+- Made synchronous stream-factory failures rebuild through the guarded error
+  path.
+- Preserved `appendError` when omitted from paged-state copies while still
+  clearing it with `clearError`.
+- Made list, grid, and sliver pagination use the append-loading surface
+  consistently for empty non-terminal pages.
+- Applied updated success-visibility durations to owned action controllers.
+- Made async-controller configuration and reset calls safe after disposal.
+
 ## 0.2.1
 
 - Prevented sequential actions queued before disposal from executing afterward.

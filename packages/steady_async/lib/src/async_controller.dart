@@ -25,7 +25,10 @@ class SteadyAsyncController<T> extends ChangeNotifier
   @override
   SteadyAsyncState<T> get value => _value;
 
-  void updateLoader(SteadyLoader<T> loader) => _loader = loader;
+  void updateLoader(SteadyLoader<T> loader) {
+    if (_disposed) return;
+    _loader = loader;
+  }
 
   Future<void> load({
     SteadyLoadingPhase phase = SteadyLoadingPhase.initial,
@@ -65,12 +68,29 @@ class SteadyAsyncController<T> extends ChangeNotifier
   Future<void> retry() => load(phase: _lastPhase);
 
   /// Invalidates the current request without claiming to cancel its Future.
+  ///
+  /// When a request is loading, the controller returns to its retained data or
+  /// to idle. This prevents an ignored completion from leaving the public state
+  /// permanently stuck in loading.
   void cancel({bool reset = false}) {
+    if (_disposed) return;
     _generation++;
-    if (reset) this.reset();
+    if (reset) {
+      _setValue(SteadyAsyncState<T>.idle());
+      return;
+    }
+    final current = _value;
+    if (current is SteadyLoading<T>) {
+      _setValue(
+        current.hasPreviousValue
+            ? SteadyAsyncState<T>.data(current.previousValue as T)
+            : SteadyAsyncState<T>.idle(),
+      );
+    }
   }
 
   void reset() {
+    if (_disposed) return;
     _generation++;
     _setValue(SteadyAsyncState<T>.idle());
   }
