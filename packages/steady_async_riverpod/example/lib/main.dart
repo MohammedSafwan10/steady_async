@@ -7,7 +7,7 @@ import 'package:steady_async_riverpod/steady_async_riverpod.dart';
 
 final greetingProvider = FutureProvider<String>((ref) async {
   await Future<void>.delayed(const Duration(milliseconds: 700));
-  return 'AsyncValue, with calmer UX';
+  return 'Loaded from AsyncValue';
 });
 
 final signedInUserProvider = Provider<String?>((ref) => 'demo-user');

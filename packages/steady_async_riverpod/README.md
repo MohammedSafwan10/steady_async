@@ -23,7 +23,7 @@ return SteadyRiverpodView<List<User>>(
 values, refresh/reload intent, stack traces, typed failure origin, errors, and
 progress are preserved. Riverpod does not expose request timestamps, so the
 adapter does not invent `lastUpdatedAt` or `lastAttemptAt` values. Requires
-Flutter 3.29+, Dart 3.7+, and Riverpod 3.
+Flutter 3.29+, Dart 3.7+, and `flutter_riverpod >=3.3.2 <4.0.0`.
 
 For cursor pagination, let an `autoDispose Provider` own a core
 `SteadyPagedController` and dispose it through `ref.onDispose`. See the complete

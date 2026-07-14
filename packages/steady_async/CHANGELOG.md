@@ -13,6 +13,14 @@
   concurrency policies.
 - Added `SteadyPagedSliverGrid` and item-threshold prefetch for paged slivers.
 - Preserved raw error access and existing Future factories for 0.x migration.
+- Made request start, cancellation, reset, source replacement, and disposal
+  safe against synchronous callback and listener reentrancy.
+- Preserved loader identity across retry attempts and retained successful
+  attempt metadata.
+- Made optimistic handles single-resolution transactions and ordered
+  latest-wins rollback before replacement apply.
+- Refreshed seeded slivers automatically and preserved initial-load retry
+  metadata.
 
 ## 0.2.2
 

@@ -215,5 +215,5 @@ last successful update time, and deterministic `isStale(maximumAge, now: ...)`.
 All controller timestamps are UTC; tests can inject `SteadyClock`.
 
 See the [interactive showcase](https://steady-async.nexdark.com),
-[migration guide](../../doc/migration.md), and
-[Riverpod/Firestore recipe](../../doc/riverpod-firestore-pagination.md).
+[migration guide](https://github.com/MohammedSafwan10/steady_async/blob/main/doc/migration.md), and
+[Riverpod/Firestore recipe](https://github.com/MohammedSafwan10/steady_async/blob/main/doc/riverpod-firestore-pagination.md).

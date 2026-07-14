@@ -26,8 +26,12 @@ content from the previous source. `retain` is explicit.
 Keyed mutation methods require `itemKey`. Optimistic methods return a handle;
 the application must commit or roll it back, or pass it to
 `SteadyActionController.runOptimistic`. The handle must still be pending when
-it is passed. Sequential optimistic calls that have not started are rolled back
-when the action controller is reset or disposed.
+it is passed. Callback-backed handles created with
+`SteadyOptimisticHandle.apply` are applied by `runOptimistic` immediately before
+the request starts or is queued. Under `latestWins`, the previous mutation is
+rolled back before the replacement is applied, so an old snapshot cannot
+overwrite newer UI. Sequential optimistic calls that have not started are
+rolled back in reverse order when the action controller is reset or disposed.
 
 Retained source replacement keeps authoritative server data and already
 committed optimistic changes. Pending optimistic overlays are invalidated and

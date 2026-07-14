@@ -9,7 +9,7 @@ class GreetingCubit extends Cubit<SteadyAsyncState<String>> {
   Future<void> load() async {
     emit(const SteadyAsyncState.loading());
     await Future<void>.delayed(const Duration(milliseconds: 700));
-    emit(const SteadyAsyncState.data('Cubit, with calmer UX'));
+    emit(const SteadyAsyncState.data('Loaded from Cubit'));
   }
 }
 
@@ -22,13 +22,15 @@ class ExampleApp extends StatelessWidget {
   Widget build(BuildContext context) => BlocProvider(
         create: (_) => GreetingCubit()..load(),
         child: MaterialApp(
-          home: Scaffold(
-            body: Center(
-              child: SteadyBlocView<GreetingCubit, SteadyAsyncState<String>,
-                  String>(
-                selector: (state) => state,
-                onRetry: () => context.read<GreetingCubit>().load(),
-                dataBuilder: (context, greeting) => Text(greeting),
+          home: Builder(
+            builder: (context) => Scaffold(
+              body: Center(
+                child: SteadyBlocView<GreetingCubit, SteadyAsyncState<String>,
+                    String>(
+                  selector: (state) => state,
+                  onRetry: () => context.read<GreetingCubit>().load(),
+                  dataBuilder: (context, greeting) => Text(greeting),
+                ),
               ),
             ),
           ),
