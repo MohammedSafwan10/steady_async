@@ -362,7 +362,7 @@ void main() {
     controller.dispose();
   });
 
-  test('disposing sequential action rolls back queued optimistic handles',
+  test('disposing sequential action invalidates deferred queued handles',
       () async {
     final firstResult = Completer<void>();
     var applied = 0;
@@ -383,7 +383,7 @@ void main() {
     controller.dispose();
 
     expect(await queuedCompleted, isTrue);
-    expect(queuedMutation.status, SteadyOptimisticStatus.rolledBack);
+    expect(queuedMutation.status, SteadyOptimisticStatus.invalidated);
     expect(applied, 0);
     firstResult.complete();
     await firstRun;

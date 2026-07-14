@@ -111,6 +111,67 @@ void main() {
     );
   });
 
+  test('source replacement reset prevents its automatic load', () async {
+    var starts = 0;
+    late SteadyPagedController<int, int> controller;
+    final observer = _CallbackObserver((event) {
+      if (event.kind == SteadyLifecycleEventKind.sourceReplaced) {
+        controller.reset();
+      }
+    });
+    controller = SteadyPagedController<int, int>(
+      firstPageKey: 0,
+      loadPage: (_) async => const SteadyPage(items: []),
+      observer: observer,
+    );
+
+    await controller.replaceSource(
+      sourceKey: 'next',
+      firstPageKey: 0,
+      loadPage: (_) async {
+        starts++;
+        return const SteadyPage(items: []);
+      },
+    );
+
+    expect(starts, 0);
+    expect(controller.value.status, SteadyPagedStatus.idle);
+    controller.dispose();
+  });
+
+  test('optimistic observer reset remains authoritative', () {
+    late SteadyPagedController<int, int> controller;
+    var resetOn = SteadyLifecycleEventKind.optimisticApplied;
+    final observer = _CallbackObserver((event) {
+      if (event.kind == resetOn) controller.reset();
+    });
+    controller = SteadyPagedController<int, int>(
+      firstPageKey: 0,
+      itemKey: (item) => item,
+      seed: const SteadyPagedSeed(items: [1]),
+      loadPage: (_) async => const SteadyPage(items: []),
+      observer: observer,
+    );
+
+    final applied = controller.optimisticUpdateByKey(1, (_) => 2);
+    expect(applied.status, SteadyOptimisticStatus.invalidated);
+    expect(controller.value.status, SteadyPagedStatus.idle);
+    controller.dispose();
+
+    controller = SteadyPagedController<int, int>(
+      firstPageKey: 0,
+      itemKey: (item) => item,
+      seed: const SteadyPagedSeed(items: [1]),
+      loadPage: (_) async => const SteadyPage(items: []),
+      observer: observer,
+    );
+    resetOn = SteadyLifecycleEventKind.optimisticCommitted;
+    final committed = controller.optimisticUpdateByKey(1, (_) => 2);
+    expect(committed.commit(), isTrue);
+    expect(controller.value.status, SteadyPagedStatus.idle);
+    controller.dispose();
+  });
+
   test('an optimistic handle cannot roll itself back during commit', () {
     final controller = SteadyPagedController<int, int>(
       firstPageKey: 0,
@@ -320,6 +381,99 @@ void main() {
     expect(actionController.value.lastAttemptAt, isNotNull);
     asyncController.dispose();
     actionController.dispose();
+  });
+
+  test('sequential optimistic actions apply at their own execution time',
+      () async {
+    final firstResult = Completer<void>();
+    var calls = 0;
+    var visible = 0;
+    final controller = SteadyActionController<void>(
+      () async {
+        if (calls++ == 0) {
+          await firstResult.future;
+          throw StateError('first failed');
+        }
+      },
+      concurrency: SteadyActionConcurrency.sequential,
+      successVisibleDuration: Duration.zero,
+    );
+
+    SteadyOptimisticHandle mutation(int next) {
+      final previous = visible;
+      return SteadyOptimisticHandle.apply(
+        apply: () => visible = next,
+        rollback: () => visible = previous,
+      );
+    }
+
+    final first = controller.runOptimistic(mutation(1));
+    final second = controller.runOptimistic(mutation(2));
+    await Future<void>.delayed(Duration.zero);
+    expect(visible, 1);
+    firstResult.complete();
+    await first;
+    await second;
+
+    expect(visible, 2);
+    controller.dispose();
+  });
+
+  test('action setup blocks reentrant request starts', () async {
+    final result = Completer<void>();
+    var starts = 0;
+    var reacted = false;
+    late SteadyActionController<void> controller;
+    controller = SteadyActionController<void>(
+      () {
+        starts++;
+        return result.future;
+      },
+      concurrency: SteadyActionConcurrency.latestWins,
+    );
+    controller.addListener(() {
+      if (!reacted && controller.value.isRunning) {
+        reacted = true;
+        unawaited(controller.run());
+      }
+    });
+
+    final run = controller.run();
+    await Future<void>.delayed(Duration.zero);
+    expect(starts, 1);
+    result.complete();
+    await run;
+    controller.dispose();
+  });
+
+  test('reset rolls back an old mutation before a replacement is applied',
+      () async {
+    final firstResult = Completer<void>();
+    var visible = 0;
+    var calls = 0;
+    final controller = SteadyActionController<void>(
+      () => calls++ == 0 ? firstResult.future : Future<void>.value(),
+      concurrency: SteadyActionConcurrency.latestWins,
+      successVisibleDuration: Duration.zero,
+    );
+
+    SteadyOptimisticHandle mutation(int next) {
+      final previous = visible;
+      return SteadyOptimisticHandle.apply(
+        apply: () => visible = next,
+        rollback: () => visible = previous,
+      );
+    }
+
+    final oldRun = controller.runOptimistic(mutation(1));
+    controller.reset();
+    final newRun = controller.runOptimistic(mutation(2));
+    firstResult.complete();
+    await oldRun;
+    await newRun;
+
+    expect(visible, 2);
+    controller.dispose();
   });
 }
 

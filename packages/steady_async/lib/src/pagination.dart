@@ -628,11 +628,14 @@ class SteadyPagedController<T, K> extends ChangeNotifier
       rollback: () => _resolveOptimistic(mutation.id, revision, commit: false),
     );
     _handles[mutation.id] = handle;
+    _publishVisible();
+    if (_disposed || revision != _sourceRevision || !handle.isPending) {
+      return handle;
+    }
     _emitOptimistic(
       SteadyLifecycleEventKind.optimisticApplied,
       mutation.id,
     );
-    _publishVisible();
     return handle;
   }
 
@@ -646,14 +649,16 @@ class SteadyPagedController<T, K> extends ChangeNotifier
     } else {
       _mutations.removeAt(index);
     }
-    _emitOptimistic(
-      commit
-          ? SteadyLifecycleEventKind.optimisticCommitted
-          : SteadyLifecycleEventKind.optimisticRolledBack,
-      id,
-    );
     _flushCommittedPrefix();
     _publishVisible();
+    if (!_disposed && revision == _sourceRevision) {
+      _emitOptimistic(
+        commit
+            ? SteadyLifecycleEventKind.optimisticCommitted
+            : SteadyLifecycleEventKind.optimisticRolledBack,
+        id,
+      );
+    }
     return true;
   }
 
@@ -775,10 +780,11 @@ class SteadyPagedController<T, K> extends ChangeNotifier
   }) async {
     if (_disposed || _transitioning) return;
     _transitioning = true;
+    late final int replacementGeneration;
     try {
       final runner = _activeRunner;
       _activeRunner = null;
-      _generation++;
+      replacementGeneration = ++_generation;
       runner?.cancel();
       if (_disposed) return;
       _loadPage = loadPage;
@@ -804,12 +810,12 @@ class SteadyPagedController<T, K> extends ChangeNotifier
         _value = SteadyPagedState<T, K>();
       }
       _emitSourceReplaced();
-      if (_disposed) return;
+      if (!_accepts(replacementGeneration)) return;
       notifyListeners();
     } finally {
       _transitioning = false;
     }
-    if (loadImmediately && !_disposed) {
+    if (loadImmediately && _accepts(replacementGeneration)) {
       _seedNeedsRefresh = false;
       await _replace(_firstPageKey, refreshing: _value.items.isNotEmpty);
     }

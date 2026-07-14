@@ -216,14 +216,15 @@ class SteadyActionController<T> extends ChangeNotifier
       return Future<T?>.value();
     }
     if (concurrency == SteadyActionConcurrency.sequential) {
-      if (!_activateMutation(mutation, transactionId)) {
-        return Future<T?>.value();
-      }
       final queued = _QueuedAction<T>(mutation, transactionId);
       _queuedActions.add(queued);
       _queue = _queue.then((_) async {
         if (queued.isCancelled) return;
         _queuedActions.remove(queued);
+        if (!_activateMutation(mutation, transactionId)) {
+          queued.complete(null);
+          return;
+        }
         try {
           queued.complete(await _execute(mutation, transactionId));
         } catch (error, stackTrace) {
@@ -263,7 +264,7 @@ class SteadyActionController<T> extends ChangeNotifier
     SteadyOptimisticHandle? mutation,
     int? transactionId,
   ) async {
-    if (_disposed) {
+    if (_disposed || _transitioning) {
       if (mutation?.rollback() ?? false) {
         _emitOptimistic(
           SteadyLifecycleEventKind.optimisticRolledBack,
@@ -272,48 +273,55 @@ class SteadyActionController<T> extends ChangeNotifier
       }
       return null;
     }
-    _successTimer?.cancel();
-    final generation = ++_generation;
-    final action = _action;
-    final cancellableAction = _cancellableAction;
-    _setValue(
-      SteadyActionState<T>.running(lastAttemptAt: _now()),
-    );
-    if (!_accepts(generation)) {
-      if (mutation?.rollback() ?? false) {
-        _emitOptimistic(
-          SteadyLifecycleEventKind.optimisticRolledBack,
-          transactionId!,
-        );
-      }
-      return null;
-    }
-    final runner = SteadyRequestRunner<T>(
-      operationId: ++_operationId,
-      controllerType: 'action',
-      operation: SteadyOperationKind.action,
-      factory: cancellableAction ??
-          () => steadyOperationFromFuture<T>(Future<T>.sync(action!)),
-      policy: requestPolicy,
-      clock: _clock,
-      observer: observer,
-      label: operationLabel,
-      onAttempt: (attempt, startedAt) {
-        if (_accepts(generation)) {
-          _setValue(
-            SteadyActionState<T>.running(
-              lastAttemptAt: startedAt,
-              attempt: attempt,
-            ),
+    _transitioning = true;
+    late final int generation;
+    late final SteadyRequestRunner<T> runner;
+    try {
+      _successTimer?.cancel();
+      generation = ++_generation;
+      final action = _action;
+      final cancellableAction = _cancellableAction;
+      _setValue(
+        SteadyActionState<T>.running(lastAttemptAt: _now()),
+      );
+      if (!_accepts(generation)) {
+        if (mutation?.rollback() ?? false) {
+          _emitOptimistic(
+            SteadyLifecycleEventKind.optimisticRolledBack,
+            transactionId!,
           );
         }
-      },
-    );
-    _activeRunners[runner] = _RunningAction<T>(
-      cancellable: cancellableAction != null,
-      mutation: mutation,
-      transactionId: transactionId,
-    );
+        return null;
+      }
+      runner = SteadyRequestRunner<T>(
+        operationId: ++_operationId,
+        controllerType: 'action',
+        operation: SteadyOperationKind.action,
+        factory: cancellableAction ??
+            () => steadyOperationFromFuture<T>(Future<T>.sync(action!)),
+        policy: requestPolicy,
+        clock: _clock,
+        observer: observer,
+        label: operationLabel,
+        onAttempt: (attempt, startedAt) {
+          if (_accepts(generation)) {
+            _setValue(
+              SteadyActionState<T>.running(
+                lastAttemptAt: startedAt,
+                attempt: attempt,
+              ),
+            );
+          }
+        },
+      );
+      _activeRunners[runner] = _RunningAction<T>(
+        cancellable: cancellableAction != null,
+        mutation: mutation,
+        transactionId: transactionId,
+      );
+    } finally {
+      _transitioning = false;
+    }
     final execution = await runner.run();
     _activeRunners.remove(runner);
     switch (execution) {
@@ -376,7 +384,7 @@ class SteadyActionController<T> extends ChangeNotifier
       _successTimer?.cancel();
       _successTimer = null;
       _generation++;
-      _stopActiveRunners();
+      _stopActiveRunners(rollbackOptimistic: true);
       _cancelQueuedActions();
       _setValue(SteadyActionState<T>.idle());
     } finally {
@@ -408,7 +416,13 @@ class SteadyActionController<T> extends ChangeNotifier
     for (final queued in _queuedActions.toList().reversed) {
       if (queued.cancel()) {
         final transactionId = queued.transactionId;
-        if (queued.mutation?.rollback() ?? false) {
+        final mutation = queued.mutation;
+        final resolved = mutation == null
+            ? false
+            : mutation.isApplied
+                ? mutation.rollback()
+                : mutation.invalidate();
+        if (resolved && mutation.status == SteadyOptimisticStatus.rolledBack) {
           _emitOptimistic(
             SteadyLifecycleEventKind.optimisticRolledBack,
             transactionId!,

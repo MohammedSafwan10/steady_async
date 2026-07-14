@@ -31,7 +31,9 @@ it is passed. Callback-backed handles created with
 the request starts or is queued. Under `latestWins`, the previous mutation is
 rolled back before the replacement is applied, so an old snapshot cannot
 overwrite newer UI. Sequential optimistic calls that have not started are
-rolled back in reverse order when the action controller is reset or disposed.
+resolved in reverse order when the action controller is reset or disposed.
+Already-applied handles are rolled back; deferred handles that never started are
+invalidated without running their apply callback.
 
 Retained source replacement keeps authoritative server data and already
 committed optimistic changes. Pending optimistic overlays are invalidated and
